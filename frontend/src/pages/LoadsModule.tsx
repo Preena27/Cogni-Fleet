@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../App';
+import { useSettings } from '../contexts/SettingsContext';
 import { 
   Layers, 
   Search, 
@@ -25,6 +26,9 @@ import { Trip, Driver, Vehicle } from '../types';
 
 export default function LoadsModule() {
   const { trips, drivers, vehicles, refreshData, addToast, secureFetch } = useAppContext();
+  const { settings } = useSettings();
+  const weightUnit = settings.weight_unit === 'Kilograms' ? 'kg' : settings.weight_unit === 'Pounds' ? 'lbs' : 'tons';
+  const weightMultiplier = settings.weight_unit === 'Kilograms' ? 1000 : settings.weight_unit === 'Pounds' ? 2204.62 : 1;
   
   // List States
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,6 +39,8 @@ export default function LoadsModule() {
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [tripToDelete, setTripToDelete] = useState<Trip | null>(null);
   
   // Manual Assignment Modal State
   const [showManualAssignModal, setShowManualAssignModal] = useState(false);
@@ -46,15 +52,11 @@ export default function LoadsModule() {
   const [autoAssignResult, setAutoAssignResult] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Route previews state
-  const [routePreview, setRoutePreview] = useState<{
-    shortest: { distance: number; duration: number; routeName: string };
-    fastest: { distance: number; duration: number; routeName: string };
-    selected: 'shortest' | 'fastest';
-  } | null>(null);
+  // Route previews state removed
 
   // Form State
   const [formData, setFormData] = useState({
+    id: undefined as number | undefined,
     customer: '',
     pickup: '',
     destination: '',
@@ -69,7 +71,10 @@ export default function LoadsModule() {
     instructions: '',
     fragile: false,
     temperature_control: false,
-    insurance: false
+    insurance: false,
+    driver_id: '' as string | number,
+    vehicle_id: '' as string | number,
+    status: 'Unassigned'
   });
 
   // CSV Import States
@@ -77,33 +82,11 @@ export default function LoadsModule() {
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importSummary, setImportSummary] = useState<any | null>(null);
 
-  // Calculate route preview estimates
-  useEffect(() => {
-    if (formData.pickup && formData.destination) {
-      const pickLen = formData.pickup.length;
-      const destLen = formData.destination.length;
-      const baseDist = Math.floor((pickLen + destLen) * 18 + 100);
-      
-      setRoutePreview({
-        shortest: {
-          distance: baseDist,
-          duration: Math.round((baseDist / 55) * 10) / 10,
-          routeName: `via I-${(pickLen % 9) + 5} S`
-        },
-        fastest: {
-          distance: Math.round(baseDist * 1.08),
-          duration: Math.round((baseDist / 65) * 10) / 10,
-          routeName: `via US-${(destLen % 9) + 101} S`
-        },
-        selected: 'shortest'
-      });
-    } else {
-      setRoutePreview(null);
-    }
-  }, [formData.pickup, formData.destination]);
+  // Route preview estimates removed
 
   const resetForm = () => {
     setFormData({
+      id: undefined,
       customer: '',
       pickup: '',
       destination: '',
@@ -118,92 +101,170 @@ export default function LoadsModule() {
       instructions: '',
       fragile: false,
       temperature_control: false,
-      insurance: false
+      insurance: false,
+      driver_id: '',
+      vehicle_id: '',
+      status: 'Unassigned'
     });
-    setRoutePreview(null);
   };
 
-  const handleCreateLoad = async (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const payload = {
-        ...formData,
-        distance: routePreview?.selected === 'shortest' ? routePreview.shortest.distance : routePreview?.fastest.distance,
-        remaining_distance: routePreview?.selected === 'shortest' ? routePreview.shortest.distance : routePreview?.fastest.distance,
-        shortest_route_meta: routePreview ? JSON.stringify(routePreview.shortest) : undefined,
-        fastest_route_meta: routePreview ? JSON.stringify(routePreview.fastest) : undefined,
+        customer: formData.customer,
+        pickup: formData.pickup,
+        destination: formData.destination,
+        cargo_type: formData.cargo_type,
+        weight: formData.weight,
+        volume: formData.volume,
+        vehicle_type: formData.vehicle_type,
+        required_capacity: formData.required_capacity,
+        priority: formData.priority,
+        pickup_date: formData.pickup_date,
+        delivery_date: formData.delivery_date,
+        instructions: formData.instructions,
+        fragile: formData.fragile,
+        temperature_control: formData.temperature_control,
+        insurance: formData.insurance,
+        driver_id: formData.driver_id ? parseInt(formData.driver_id as string) : null,
+        vehicle_id: formData.vehicle_id ? parseInt(formData.vehicle_id as string) : null,
+        status: formData.status,
+        distance: 620.0,
+        remaining_distance: 620.0,
+        shortest_route_meta: undefined,
+        fastest_route_meta: undefined,
         route_coordinates: JSON.stringify([
-          [37.7749, -122.4194],  
-          [34.0522, -118.2437]
+          [13.0827, 80.2707],  
+          [11.0168, 76.9558]
         ])
       };
 
-      const res = await secureFetch('http://localhost:8000/api/trips', {
-        method: 'POST',
+      const isEdit = formData.id !== undefined;
+      const url = isEdit 
+        ? `http://localhost:8000/api/trips/${formData.id}` 
+        : 'http://localhost:8000/api/trips';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const res = await secureFetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        addToast("Load Registered", `New shipment for ${formData.customer} registered on the dispatch board.`, "success");
+        addToast(
+          isEdit ? "Load Updated" : "Load Registered", 
+          isEdit ? `Load #${formData.id} details updated.` : `New shipment for ${formData.customer} registered on the dispatch board.`, 
+          "success"
+        );
         setShowCreateModal(false);
         resetForm();
         refreshData('trips');
+        refreshData('drivers');
+        refreshData('vehicles');
+      } else {
+        const err = await res.json();
+        addToast("Operation Failed", err.detail || "Error saving load details.", "error");
       }
     } catch (err) {
       console.error(err);
+      addToast("Network Error", "Could not reach server.", "error");
     }
   };
 
-  const handleDeleteLoad = async (tripId: number) => {
-    if (!confirm("Are you sure you want to delete this trip record?")) return;
+  const handleEditLoadOpen = (trip: Trip) => {
+    setFormData({
+      id: trip.id,
+      customer: trip.customer,
+      pickup: trip.pickup,
+      destination: trip.destination,
+      cargo_type: trip.cargo_type || '',
+      weight: trip.weight || 0.0,
+      volume: trip.volume || 0.0,
+      vehicle_type: trip.vehicle_type || 'Semi-Truck',
+      required_capacity: trip.required_capacity || 0.0,
+      priority: trip.priority || 'Medium',
+      pickup_date: trip.pickup_date || new Date().toISOString().split('T')[0],
+      delivery_date: trip.delivery_date || new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      instructions: trip.instructions || '',
+      fragile: trip.fragile || false,
+      temperature_control: trip.temperature_control || false,
+      insurance: trip.insurance || false,
+      driver_id: trip.driver_id || '',
+      vehicle_id: trip.vehicle_id || '',
+      status: trip.status || 'Unassigned'
+    });
+    setShowCreateModal(true);
+  };
+
+  const handleCopyLoadTrigger = (trip: Trip) => {
+    setFormData({
+      id: undefined,
+      customer: `${trip.customer} (Copy)`,
+      pickup: trip.pickup,
+      destination: trip.destination,
+      cargo_type: trip.cargo_type || '',
+      weight: trip.weight || 0.0,
+      volume: trip.volume || 0.0,
+      vehicle_type: trip.vehicle_type || 'Semi-Truck',
+      required_capacity: trip.required_capacity || 0.0,
+      priority: trip.priority || 'Medium',
+      pickup_date: trip.pickup_date || new Date().toISOString().split('T')[0],
+      delivery_date: trip.delivery_date || new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      instructions: trip.instructions || '',
+      fragile: trip.fragile || false,
+      temperature_control: trip.temperature_control || false,
+      insurance: trip.insurance || false,
+      driver_id: '',
+      vehicle_id: '',
+      status: 'Draft' // Remain in Draft status
+    });
+    setShowCreateModal(true);
+  };
+
+  const handleDeleteConfirmOpen = (trip: Trip) => {
+    setTripToDelete(trip);
+    setShowDeleteModal(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!tripToDelete) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/trips/${tripId}`, {
+      const res = await secureFetch(`http://localhost:8000/api/trips/${tripToDelete.id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
         addToast("Record Purged", "Shipment record removed from operations.", "warning");
         setSelectedTrip(null);
+        setShowDeleteModal(false);
+        setTripToDelete(null);
         refreshData('trips');
+      } else {
+        const err = await res.json();
+        addToast("Deletion Failed", err.detail || "Could not delete trip record.", "error");
       }
     } catch (err) {
       console.error(err);
+      addToast("Network Error", "Server could not be reached.", "error");
     }
   };
 
-  const handleDuplicateLoad = async (trip: Trip) => {
+  const handleAcceptLoad = async (trip: Trip) => {
     try {
-      const duplicateData = {
-        customer: `${trip.customer} (Copy)`,
-        pickup: trip.pickup,
-        destination: trip.destination,
-        cargo_type: trip.cargo_type,
-        weight: trip.weight,
-        volume: trip.volume,
-        vehicle_type: trip.vehicle_type,
-        required_capacity: trip.required_capacity,
-        priority: trip.priority,
-        pickup_date: trip.pickup_date,
-        delivery_date: trip.delivery_date,
-        instructions: trip.instructions,
-        fragile: trip.fragile,
-        temperature_control: trip.temperature_control,
-        insurance: trip.insurance,
-        distance: trip.distance,
-        remaining_distance: trip.remaining_distance,
-        shortest_route_meta: trip.shortest_route_meta,
-        fastest_route_meta: trip.fastest_route_meta,
-        route_coordinates: trip.route_coordinates
-      };
-      
-      const res = await secureFetch('http://localhost:8000/api/trips', {
-        method: 'POST',
-        body: JSON.stringify(duplicateData)
+      const res = await secureFetch(`http://localhost:8000/api/trips/${trip.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...trip, status: 'Accepted' })
       });
       if (res.ok) {
-        addToast("Duplicate Created", `Duplicated load configuration for ${trip.customer}.`, "success");
+        addToast("Load Accepted", `Load #${trip.id} is now ready for assignment.`, "success");
         refreshData('trips');
+      } else {
+        addToast("Accept Failed", "Could not accept load.", "error");
       }
     } catch (err) {
       console.error(err);
+      addToast("Network Error", "Could not reach server.", "error");
     }
   };
 
@@ -286,7 +347,7 @@ export default function LoadsModule() {
     }
   };
 
-  // CSV Import Simulation
+  // CSV Import Simulation & Validation
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -295,88 +356,208 @@ export default function LoadsModule() {
     reader.onload = (event) => {
       const text = event.target?.result as string;
       const lines = text.split('\n');
+      if (lines.length <= 1) {
+        addToast("Empty CSV File", "The CSV file does not contain any record rows.", "warning");
+        return;
+      }
       
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+      
+      // Let's identify the index of each column
+      let loadIdIdx = headers.indexOf("load id");
+      if (loadIdIdx === -1) loadIdIdx = headers.indexOf("id");
+      
+      let pickupIdx = headers.indexOf("pickup");
+      let destIdx = headers.indexOf("destination");
+      
+      let productIdx = headers.indexOf("product");
+      if (productIdx === -1) productIdx = headers.indexOf("cargo_type");
+      if (productIdx === -1) productIdx = headers.indexOf("cargo");
+      
+      let weightIdx = headers.indexOf("weight");
+      if (weightIdx === -1) weightIdx = headers.indexOf("product weight");
+      
+      let priorityIdx = headers.indexOf("priority");
+      
+      let deliveryDateIdx = headers.indexOf("delivery date");
+      if (deliveryDateIdx === -1) deliveryDateIdx = headers.indexOf("delivery_date");
+      
+      let capacityIdx = headers.indexOf("vehicle capacity");
+      if (capacityIdx === -1) capacityIdx = headers.indexOf("required_capacity");
+      
+      let customerIdx = headers.indexOf("customer");
+      let statusIdx = headers.indexOf("status");
+
+      // Validate required columns exist in the header row
+      if (pickupIdx === -1 || destIdx === -1 || weightIdx === -1 || priorityIdx === -1 || deliveryDateIdx === -1 || capacityIdx === -1) {
+        addToast(
+          "Validation Error", 
+          "CSV is missing one or more required columns: Pickup, Destination, Weight, Priority, Delivery Date, Vehicle Capacity.", 
+          "error"
+        );
+        return;
+      }
+
       const parsedRows: any[] = [];
-      const errors: string[] = [];
+      const uniqueLoadIds = new Set<string>();
       
-      // Basic CSV reading
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
         
-        const cols = line.split(',');
-        if (cols.length < 3) {
-          errors.push(`Row ${i + 1}: Insufficient column values.`);
-          continue;
+        // Correctly split row by comma, considering quotes
+        const cols: string[] = [];
+        let currentVal = '';
+        let inQuotes = false;
+        for (let charIdx = 0; charIdx < line.length; charIdx++) {
+          const char = line[charIdx];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            cols.push(currentVal.trim().replace(/^["']|["']$/g, ''));
+            currentVal = '';
+          } else {
+            currentVal += char;
+          }
+        }
+        cols.push(currentVal.trim().replace(/^["']|["']$/g, ''));
+
+        if (cols.length < headers.length) {
+          while (cols.length < headers.length) {
+            cols.push('');
+          }
         }
 
-        const customer = cols[0]?.trim();
-        const pickup = cols[1]?.trim();
-        const destination = cols[2]?.trim();
-        const weight = parseFloat(cols[3]?.trim()) || 5.0;
+        const rowErrors: string[] = [];
         
-        // Basic duplicate check in current upload or database
-        const isDuplicate = trips.some(t => t.customer === customer && t.pickup === pickup && t.destination === destination);
+        // 1. Load ID validation
+        const loadIdStr = loadIdIdx !== -1 ? cols[loadIdIdx] : '';
+        const loadIdVal = loadIdStr ? parseInt(loadIdStr) : undefined;
+        if (loadIdStr && (isNaN(Number(loadIdStr)) || !Number.isInteger(Number(loadIdStr)))) {
+          rowErrors.push("Load ID must be an integer.");
+        }
+        if (loadIdStr && uniqueLoadIds.has(loadIdStr)) {
+          rowErrors.push(`Duplicate Load ID '${loadIdStr}' inside CSV file.`);
+        } else if (loadIdStr) {
+          uniqueLoadIds.add(loadIdStr);
+        }
+
+        // 2. Pickup location validation
+        const pickupVal = pickupIdx !== -1 ? cols[pickupIdx] : '';
+        if (!pickupVal) {
+          rowErrors.push("Pickup location is missing.");
+        }
+
+        // 3. Destination location validation
+        const destinationVal = destIdx !== -1 ? cols[destIdx] : '';
+        if (!destinationVal) {
+          rowErrors.push("Destination location is missing.");
+        }
+
+        // 4. Vehicle capacity validation
+        const capacityStr = capacityIdx !== -1 ? cols[capacityIdx] : '';
+        const capacityVal = parseFloat(capacityStr);
+        if (!capacityStr || isNaN(capacityVal) || capacityVal <= 0) {
+          rowErrors.push("Vehicle Capacity must be a numeric value greater than 0.");
+        }
+
+        // 5. Product weight validation
+        const weightStr = weightIdx !== -1 ? cols[weightIdx] : '';
+        const weightVal = parseFloat(weightStr);
+        if (!weightStr || isNaN(weightVal) || weightVal <= 0) {
+          rowErrors.push("Product Weight must be a numeric value greater than 0.");
+        }
+
+        // 6. Priority validation
+        const priorityVal = priorityIdx !== -1 ? cols[priorityIdx] : 'Medium';
+        const validPriorities = ["Low", "Medium", "High", "Critical"];
+        if (!validPriorities.includes(priorityVal)) {
+          rowErrors.push("Priority must be one of: Low, Medium, High, Critical.");
+        }
+
+        // 7. Delivery Date validation
+        const deliveryDateStr = deliveryDateIdx !== -1 ? cols[deliveryDateIdx] : '';
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!deliveryDateStr || !dateRegex.test(deliveryDateStr)) {
+          rowErrors.push("Delivery Date must be in YYYY-MM-DD format.");
+        }
+
+        const customerVal = customerIdx !== -1 ? cols[customerIdx] : 'CSV Import';
+        const productVal = productIdx !== -1 ? cols[productIdx] : 'General Freight';
+        const statusVal = statusIdx !== -1 ? cols[statusIdx] : 'Unassigned';
+
+        // Check duplicate in database
+        const isDuplicateInDb = trips.some(t => 
+          (loadIdVal !== undefined && t.id === loadIdVal) || 
+          (t.customer === customerVal && t.pickup === pickupVal && t.destination === destinationVal)
+        );
 
         parsedRows.push({
-          id: i,
-          customer,
-          pickup,
-          destination,
-          weight,
-          status: isDuplicate ? 'Duplicate Alert' : 'Valid',
-          isDuplicate
+          id: loadIdVal,
+          customer: customerVal,
+          pickup: pickupVal,
+          destination: destinationVal,
+          cargo_type: productVal,
+          weight: isNaN(weightVal) ? 0 : weightVal,
+          required_capacity: isNaN(capacityVal) ? 0 : capacityVal,
+          priority: priorityVal,
+          delivery_date: deliveryDateStr,
+          status: statusVal,
+          selected: rowErrors.length === 0 && !isDuplicateInDb,
+          isDuplicate: isDuplicateInDb,
+          errors: rowErrors,
+          isValid: rowErrors.length === 0
         });
       }
 
       setImportPreview(parsedRows);
-      setImportErrors(errors);
+      setImportSummary(null);
     };
     reader.readAsText(file);
   };
 
   const processImport = async () => {
-    let successCount = 0;
-    let skipCount = 0;
-
-    for (const row of importPreview) {
-      if (row.isDuplicate) {
-        skipCount++;
-        continue;
-      }
-
-      try {
-        const importPayload = {
-          customer: row.customer,
-          pickup: row.pickup,
-          destination: row.destination,
-          weight: row.weight,
-          cargo_type: "General Freight",
-          vehicle_type: "Semi-Truck",
-          priority: "Medium"
-        };
-
-        const res = await secureFetch('http://localhost:8000/api/trips', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(importPayload)
-        });
-        if (res.ok) {
-          successCount++;
-        }
-      } catch (err) {
-        console.error(err);
-      }
+    const selectedRows = importPreview.filter(r => r.selected);
+    if (selectedRows.length === 0) {
+      addToast("Import Warning", "No valid rows selected to import.", "warning");
+      return;
     }
 
-    setImportSummary({
-      success: successCount,
-      skipped: skipCount,
-      failed: importPreview.length - successCount - skipCount
-    });
+    const payload = selectedRows.map(row => ({
+      id: row.id,
+      customer: row.customer,
+      pickup: row.pickup,
+      destination: row.destination,
+      cargo_type: row.cargo_type,
+      weight: row.weight,
+      required_capacity: row.required_capacity,
+      priority: row.priority,
+      delivery_date: row.delivery_date,
+      status: row.status
+    }));
 
-    addToast("Bulk Import Completed", `Successfully imported ${successCount} loads. Skipped ${skipCount} duplicates.`, "success");
-    refreshData('trips');
+    try {
+      const res = await secureFetch('http://localhost:8000/api/trips/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const summary = await res.json();
+        setImportSummary(summary);
+        addToast(
+          "Import Completed", 
+          `Successfully Imported : ${summary.success}\nSkipped : ${summary.skipped}\nFailed : ${summary.failed}`, 
+          "success"
+        );
+        refreshData('trips');
+      } else {
+        addToast("Import Failed", "Failed to upload selected loads to database.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      addToast("Network Error", "Could not reach the bulk import endpoint.", "error");
+    }
   };
 
   const handleExportCSV = () => {
@@ -473,13 +654,6 @@ export default function LoadsModule() {
             Export CSV
           </button>
           <button 
-            onClick={() => setShowImportModal(true)}
-            className="px-3 py-1.5 border hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1.5 transition-all"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            Import CSV
-          </button>
-          <button 
             onClick={() => { resetForm(); setShowCreateModal(true); }}
             className="px-3.5 py-1.5 bg-primary-600 hover:bg-primary-750 text-white rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1.5 transition-colors"
           >
@@ -503,7 +677,7 @@ export default function LoadsModule() {
                   <th className="py-3 text-center">Weight</th>
                   <th className="py-3 text-center">Priority</th>
                   <th className="py-3 text-center">Status</th>
-                  <th className="py-3 text-right">Quick Task</th>
+                  <th className="py-3 text-right">Quick Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 dark:divide-slate-850/85">
@@ -527,7 +701,7 @@ export default function LoadsModule() {
                         <ChevronRight className="w-3 h-3 text-slate-400 inline mx-1" />
                         <span className="text-slate-500">{trip.destination}</span>
                       </td>
-                      <td className="py-3.5 text-center font-semibold">{trip.weight} tons</td>
+                      <td className="py-3.5 text-center font-semibold">{Math.round(trip.weight * weightMultiplier)} {weightUnit}</td>
                       <td className="py-3.5 text-center">
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${getPriorityStyle(trip.priority)}`}>
                           {trip.priority}
@@ -544,39 +718,55 @@ export default function LoadsModule() {
                         </span>
                       </td>
                       <td className="py-3.5 text-right" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          {trip.status === 'Unassigned' && (
-                            <div className="flex gap-1">
+                        <div className="flex items-center justify-end gap-2">
+                          {trip.status === 'Accepted' && (
+                            <div className="flex gap-1 mr-1">
                               <button 
                                 onClick={() => handleAutoAssignTrigger(trip)}
-                                className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold flex items-center gap-1 shadow-soft-sm transition-all cursor-pointer"
+                                className="px-1.5 py-0.5 bg-indigo-600 hover:bg-indigo-750 text-white rounded text-[9px] font-bold flex items-center gap-0.5 shadow-soft-sm transition-all"
                                 title="Optimize with Auto-Assign webhook"
                               >
-                                <Sparkles className="w-3 h-3 animate-pulse" />
+                                <Sparkles className="w-2.5 h-2.5" />
                                 Auto
                               </button>
                               <button 
                                 onClick={() => handleManualAssignOpen(trip)}
-                                className="px-2 py-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-350 rounded text-[10px] font-bold flex items-center gap-1 border border-slate-250 dark:border-slate-750 transition-all cursor-pointer"
+                                className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-350 rounded text-[9px] font-bold flex items-center border border-slate-250 dark:border-slate-750 transition-all"
                                 title="Manually assign driver and vehicle"
                               >
                                 Manual
                               </button>
                             </div>
                           )}
+                          {(trip.status === 'Draft' || trip.status === 'Unassigned') && (
+                            <button 
+                              onClick={() => handleAcceptLoad(trip)}
+                              className="px-2 py-0.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400 rounded text-[10px] font-bold transition-colors"
+                              title="Accept Load"
+                            >
+                              Accept
+                            </button>
+                          )}
                           <button 
-                            onClick={() => handleDuplicateLoad(trip)}
-                            className="p-1 text-slate-450 hover:text-slate-700 dark:hover:text-slate-200"
-                            title="Duplicate Load"
+                            onClick={() => handleEditLoadOpen(trip)}
+                            className="px-2 py-0.5 bg-primary-100 hover:bg-primary-200 text-primary-700 dark:bg-primary-950/20 dark:text-primary-400 rounded text-[10px] font-bold transition-colors"
+                            title="Edit Load"
                           >
-                            <Copy className="w-3.5 h-3.5" />
+                            Edit
                           </button>
                           <button 
-                            onClick={() => handleDeleteLoad(trip.id)}
-                            className="p-1 text-slate-455 hover:text-red-650"
+                            onClick={() => handleCopyLoadTrigger(trip)}
+                            className="px-2 py-0.5 bg-slate-100 hover:bg-slate-205 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded text-[10px] font-bold transition-colors"
+                            title="Copy Load as Draft"
+                          >
+                            Copy
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteConfirmOpen(trip)}
+                            className="px-2 py-0.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/20 text-red-700 dark:text-red-400 rounded text-[10px] font-bold transition-colors"
                             title="Delete Load"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete
                           </button>
                         </div>
                       </td>
@@ -614,7 +804,7 @@ export default function LoadsModule() {
               <div className="grid grid-cols-2 gap-3.5 border-t pt-2.5 border-slate-50 dark:border-slate-800">
                 <div>
                   <span className="text-[9px] block text-slate-400 font-semibold uppercase">Cargo weight</span>
-                  <span className="font-bold text-slate-700 dark:text-slate-200">{selectedTrip.weight} Tons</span>
+                  <span className="font-bold text-slate-700 dark:text-slate-200">{Math.round(selectedTrip.weight * weightMultiplier)} {weightUnit}</span>
                 </div>
                 <div>
                   <span className="text-[9px] block text-slate-400 font-semibold uppercase">Cargo Class</span>
@@ -707,9 +897,11 @@ export default function LoadsModule() {
       {showCreateModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-lg w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in max-h-[90vh] overflow-y-auto">
-            <h3 className="font-bold text-base text-slate-855 dark:text-slate-100">Establish Cargo Dispatch Load</h3>
+            <h3 className="font-bold text-base text-slate-855 dark:text-slate-100">
+              {formData.id !== undefined ? `Edit Load #L-${formData.id}` : formData.status === 'Draft' ? 'Confirm Copied Load Draft' : 'Establish Cargo Dispatch Load'}
+            </h3>
             
-            <form onSubmit={handleCreateLoad} className="flex flex-col gap-3 text-xs">
+            <form onSubmit={handleFormSubmit} className="flex flex-col gap-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1">
                   <label className="font-semibold text-slate-500">Customer Client</label>
@@ -754,7 +946,7 @@ export default function LoadsModule() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div className="flex flex-col gap-1">
-                  <label className="font-semibold text-slate-500">Weight (Tons)</label>
+                  <label className="font-semibold text-slate-500">Weight ({weightUnit})</label>
                   <input 
                     type="number" step="0.1" required
                     value={formData.weight}
@@ -835,48 +1027,57 @@ export default function LoadsModule() {
                 </label>
               </div>
 
-              {/* Route directions preview options selector */}
-              {routePreview && (
-                <div className="flex flex-col gap-2 p-3 bg-slate-55 dark:bg-slate-800/20 border border-slate-105 rounded-xl">
-                  <span className="text-[10px] uppercase font-bold tracking-wider text-slate-450">
-                    Directions Routing Optimization (Google Maps Engine)
-                  </span>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => setRoutePreview({ ...routePreview, selected: 'shortest' })}
-                      className={`p-2.5 rounded-lg border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                        routePreview.selected === 'shortest'
-                          ? 'border-primary-500 bg-primary-50/20 dark:bg-primary-950/10'
-                          : 'border-slate-200 dark:border-slate-800 hover:bg-slate-100/50'
-                      }`}
+              {/* If in Edit mode, show Driver, Vehicle, and Status fields */}
+              {formData.id !== undefined && (
+                <div className="grid grid-cols-3 gap-3 border-t pt-3 border-slate-100 dark:border-slate-800">
+                  <div className="flex flex-col gap-1">
+                    <label className="font-semibold text-slate-500">Assigned Driver</label>
+                    <select
+                      value={formData.driver_id || ''}
+                      onChange={e => setFormData({...formData, driver_id: e.target.value})}
+                      className="px-3 py-2 rounded-lg border border-slate-205 dark:border-slate-800 bg-white dark:bg-slate-900 focus:outline-none"
                     >
-                      <span className="font-bold text-[10px] text-slate-800 dark:text-slate-200">Shortest Route</span>
-                      <span className="text-[9px] text-slate-450">{routePreview.shortest.routeName}</span>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-slate-700 dark:text-slate-300 mt-1">
-                        <span>{routePreview.shortest.distance} mi</span>
-                        <span>{routePreview.shortest.duration} hrs</span>
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRoutePreview({ ...routePreview, selected: 'fastest' })}
-                      className={`p-2.5 rounded-lg border text-left flex flex-col gap-1 transition-all cursor-pointer ${
-                        routePreview.selected === 'fastest'
-                          ? 'border-emerald-500 bg-emerald-50/20 dark:bg-emerald-950/10'
-                          : 'border-slate-200 dark:border-slate-800 hover:bg-slate-100/50'
-                      }`}
+                      <option value="">None Assigned</option>
+                      {drivers.map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.availability})</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div className="flex flex-col gap-1">
+                    <label className="font-semibold text-slate-500">Assigned Vehicle</label>
+                    <select
+                      value={formData.vehicle_id || ''}
+                      onChange={e => setFormData({...formData, vehicle_id: e.target.value})}
+                      className="px-3 py-2 rounded-lg border border-slate-205 dark:border-slate-800 bg-white dark:bg-slate-900 focus:outline-none"
                     >
-                      <span className="font-bold text-[10px] text-slate-800 dark:text-slate-200">Fastest Route (Rec)</span>
-                      <span className="text-[9px] text-slate-450">{routePreview.fastest.routeName}</span>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-slate-700 dark:text-slate-300 mt-1">
-                        <span>{routePreview.fastest.distance} mi</span>
-                        <span>{routePreview.fastest.duration} hrs</span>
-                      </div>
-                    </button>
+                      <option value="">None Assigned</option>
+                      {vehicles.map(v => (
+                        <option key={v.id} value={v.id}>{v.vehicle_number} ({v.type})</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div className="flex flex-col gap-1">
+                    <label className="font-semibold text-slate-500">Load Status</label>
+                    <select
+                      value={formData.status}
+                      onChange={e => setFormData({...formData, status: e.target.value})}
+                      className="px-3 py-2 rounded-lg border border-slate-205 dark:border-slate-800 bg-white dark:bg-slate-900 focus:outline-none"
+                    >
+                      <option value="Draft">Draft</option>
+                      <option value="Unassigned">Unassigned</option>
+                      <option value="Assigned">Assigned</option>
+                      <option value="Loading">Loading</option>
+                      <option value="In Transit">In Transit</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Problem">Problem</option>
+                    </select>
                   </div>
                 </div>
               )}
+
+
 
               <div className="flex justify-end gap-2.5 mt-2">
                 <button 
@@ -889,7 +1090,7 @@ export default function LoadsModule() {
                   type="submit"
                   className="px-4 py-2 bg-primary-600 hover:bg-primary-750 text-white rounded-lg font-semibold shadow-soft-sm"
                 >
-                  Publish Load
+                  {formData.id !== undefined ? "Save Changes" : formData.status === 'Draft' ? "Confirm & Save Draft" : "Publish Load"}
                 </button>
               </div>
             </form>
@@ -900,67 +1101,173 @@ export default function LoadsModule() {
       {/* 2. CSV Import Modal */}
       {showImportModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-xl w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in">
+          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-4xl w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in max-h-[90vh] overflow-y-auto">
             <h3 className="font-bold text-base text-slate-855 dark:text-slate-100">Bulk CSV Upload Portal</h3>
             
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-slate-500">Select Load File (.csv)</label>
-              <input 
-                type="file" accept=".csv"
-                onChange={handleCSVUpload}
-                className="w-full text-xs text-slate-500 border border-slate-205 dark:border-slate-800 rounded-lg p-2 bg-slate-55 dark:bg-slate-800/10 cursor-pointer"
-              />
-            </div>
-
-            {/* Preview Sheet */}
-            {importPreview.length > 0 && (
-              <div className="border rounded-lg overflow-hidden max-h-60 overflow-y-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-50 dark:bg-slate-800 border-b">
-                    <tr className="text-slate-450 font-bold">
-                      <th className="p-2">Customer</th>
-                      <th className="p-2">Pickup</th>
-                      <th className="p-2">Destination</th>
-                      <th className="p-2 text-right">Tons</th>
-                      <th className="p-2 text-center">Validation</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {importPreview.map((row, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/10">
-                        <td className="p-2 font-semibold">{row.customer}</td>
-                        <td className="p-2">{row.pickup}</td>
-                        <td className="p-2">{row.destination}</td>
-                        <td className="p-2 text-right">{row.weight}</td>
-                        <td className="p-2 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                            row.isDuplicate ? 'bg-red-50 text-red-750 dark:bg-red-950/20' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20'
-                          }`}>
-                            {row.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {importSummary ? (
+              <div className="flex flex-col gap-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <div className="bg-blue-50 dark:bg-blue-950/20 text-blue-800 dark:text-blue-400 p-3 rounded-lg border border-blue-100 font-bold mb-2">
+                  Import completed successfully!
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 rounded-lg text-center">
+                    <span className="text-[10px] text-emerald-800 dark:text-emerald-400 uppercase block font-bold mb-1">Successfully Imported</span>
+                    <span className="text-xl font-extrabold text-emerald-800 dark:text-emerald-400">{importSummary.success}</span>
+                  </div>
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-100 rounded-lg text-center">
+                    <span className="text-[10px] text-amber-800 dark:text-amber-400 uppercase block font-bold mb-1">Skipped (Duplicates)</span>
+                    <span className="text-xl font-extrabold text-amber-800 dark:text-amber-400">{importSummary.skipped}</span>
+                  </div>
+                  <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-100 rounded-lg text-center">
+                    <span className="text-[10px] text-red-800 dark:text-red-400 uppercase block font-bold mb-1">Failed</span>
+                    <span className="text-xl font-extrabold text-red-800 dark:text-red-400">{importSummary.failed}</span>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2.5 mt-2 border-t pt-3">
+                  <button
+                    onClick={() => { setImportPreview([]); setImportSummary(null); setShowImportModal(false); }}
+                    className="px-4 py-2 bg-primary-600 hover:bg-primary-750 text-white rounded-lg font-semibold shadow-soft-sm cursor-pointer"
+                  >
+                    Close Portal
+                  </button>
+                </div>
               </div>
-            )}
+            ) : (
+              <>
+                {importPreview.length === 0 ? (
+                  <div className="flex flex-col gap-1.5 py-4">
+                    <label className="text-xs font-semibold text-slate-500">Select Load File (.csv)</label>
+                    <input 
+                      type="file" accept=".csv"
+                      onChange={handleCSVUpload}
+                      className="w-full text-xs text-slate-500 border border-slate-205 dark:border-slate-800 rounded-lg p-3 bg-slate-55 dark:bg-slate-800/10 cursor-pointer"
+                    />
+                    <div className="text-[10px] text-slate-405 mt-2">
+                      <span className="font-bold">Required Columns in Header Row:</span> Pickup, Destination, Weight, Priority, Delivery Date, Vehicle Capacity
+                    </div>
+                    <div className="flex justify-end gap-2.5 mt-4 border-t pt-3">
+                      <button 
+                        type="button" 
+                        onClick={() => { setShowImportModal(false); setImportPreview([]); }}
+                        className="px-4 py-2 border rounded-lg font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-550 dark:text-slate-455 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-850 p-3 rounded-lg border border-slate-100 dark:border-slate-800 gap-4 flex-wrap">
+                      <div className="flex gap-4 text-xs font-semibold text-slate-600 dark:text-slate-350">
+                        <div>Selected Rows: <span className="text-primary-650 dark:text-primary-400 font-bold">{importPreview.filter(r => r.selected).length}</span></div>
+                        <div>Invalid Rows: <span className="text-red-650 font-bold">{importPreview.filter(r => !r.isValid).length}</span></div>
+                        <div>Duplicates (DB): <span className="text-amber-605 font-bold">{importPreview.filter(r => r.isDuplicate).length}</span></div>
+                        <div>Estimated Total Loads to Import: <span className="text-emerald-650 dark:text-emerald-450 font-bold">{importPreview.filter(r => r.selected).length}</span></div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setImportPreview(prev => prev.map(r => r.isValid ? { ...r, selected: true } : r))}
+                          className="px-2.5 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded font-bold transition-all"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImportPreview(prev => prev.map(r => ({ ...r, selected: false })))}
+                          className="px-2.5 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded font-bold transition-all"
+                        >
+                          Deselect All
+                        </button>
+                      </div>
+                    </div>
 
-            <div className="flex justify-end gap-2.5 mt-2">
-              <button 
-                type="button" onClick={() => { setImportPreview([]); setShowImportModal(false); }}
-                className="px-4 py-2 border rounded-lg font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-550 dark:text-slate-455"
-              >
-                Cancel
-              </button>
-              <button 
-                type="button" onClick={() => processImport()}
-                disabled={importPreview.length === 0}
-                className="px-4 py-2 bg-primary-650 hover:bg-primary-750 disabled:bg-slate-205 text-white rounded-lg font-semibold shadow-soft-sm"
-              >
-                Start Bulk Import
-              </button>
-            </div>
+                    <div className="border rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead className="bg-slate-50 dark:bg-slate-800 border-b sticky top-0">
+                          <tr className="text-slate-450 font-bold uppercase tracking-wider text-[10px]">
+                            <th className="p-2.5 text-center w-10">Select</th>
+                            <th className="p-2.5 w-20">Load ID</th>
+                            <th className="p-2.5">Pickup</th>
+                            <th className="p-2.5">Destination</th>
+                            <th className="p-2.5">Product</th>
+                            <th className="p-2.5 text-right w-16">Weight</th>
+                            <th className="p-2.5 text-center w-20">Priority</th>
+                            <th className="p-2.5 text-center w-28">Delivery Date</th>
+                            <th className="p-2.5 text-center w-28">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {importPreview.map((row, idx) => (
+                            <React.Fragment key={idx}>
+                              <tr className={`hover:bg-slate-50 dark:hover:bg-slate-800/10 ${!row.isValid ? 'bg-red-50/20 dark:bg-red-950/5' : ''}`}>
+                                <td className="p-2.5 text-center">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={row.selected}
+                                    disabled={!row.isValid}
+                                    onChange={e => {
+                                      const checked = e.target.checked;
+                                      setImportPreview(prev => prev.map((r, rIdx) => rIdx === idx ? { ...r, selected: checked } : r));
+                                    }}
+                                    className="w-4 h-4 rounded text-primary-500 border-slate-300 focus:ring-primary-400 disabled:opacity-50"
+                                  />
+                                </td>
+                                <td className="p-2.5 font-mono font-bold">
+                                  {row.id !== undefined ? `#L-${row.id}` : 'Auto'}
+                                </td>
+                                <td className="p-2.5 font-semibold">{row.pickup || <span className="text-red-550 font-bold">Empty</span>}</td>
+                                <td className="p-2.5 font-semibold">{row.destination || <span className="text-red-550 font-bold">Empty</span>}</td>
+                                <td className="p-2.5 text-slate-500">{row.cargo_type}</td>
+                                <td className="p-2.5 text-right font-bold">{row.weight}</td>
+                                <td className="p-2.5 text-center">
+                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${getPriorityStyle(row.priority)}`}>
+                                    {row.priority}
+                                  </span>
+                                </td>
+                                <td className="p-2.5 text-center font-mono">{row.delivery_date || <span className="text-red-550 font-bold">Empty</span>}</td>
+                                <td className="p-2.5 text-center">
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                                    row.isDuplicate ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/20' : 
+                                    !row.isValid ? 'bg-red-105 text-red-800 dark:bg-red-950/20' : 
+                                    'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/20'
+                                  }`}>
+                                    {row.isDuplicate ? 'Duplicate DB' : !row.isValid ? 'Invalid' : 'Valid'}
+                                  </span>
+                                </td>
+                              </tr>
+                              {row.errors.length > 0 && (
+                                <tr key={`err-${idx}`} className="bg-red-50/10 dark:bg-red-950/5">
+                                  <td colSpan={9} className="px-10 py-1 text-red-500 text-[10px] italic font-semibold">
+                                    Row errors: {row.errors.join(" | ")}
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex justify-end gap-2.5 mt-2 border-t pt-3">
+                      <button 
+                        type="button" onClick={() => { setImportPreview([]); }}
+                        className="px-4 py-2 border rounded-lg font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-550 dark:text-slate-455"
+                      >
+                        Reset / Choose File
+                      </button>
+                      <button 
+                        type="button" onClick={() => processImport()}
+                        disabled={importPreview.filter(r => r.selected).length === 0}
+                        className="px-4 py-2 bg-primary-600 hover:bg-primary-750 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-lg font-semibold shadow-soft-sm cursor-pointer"
+                      >
+                        Import Selected ({importPreview.filter(r => r.selected).length})
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1107,6 +1414,52 @@ export default function LoadsModule() {
                 >
                   Confirm & Apply Auto Assignment
                 </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* 5. Delete Confirmation Modal */}
+      {showDeleteModal && tripToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-sm w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in">
+            <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100 border-b pb-2">Delete Load Record</h3>
+            
+            {tripToDelete.status !== 'Unassigned' && tripToDelete.status !== 'Draft' ? (
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 text-red-750 dark:text-red-400 rounded-lg border border-red-100 font-semibold leading-relaxed">
+                  Warning: Load #L-{tripToDelete.id} is currently in <strong>{tripToDelete.status}</strong> status. Assigned or active loads cannot be deleted to maintain operational integrity.
+                </div>
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={() => { setShowDeleteModal(false); setTripToDelete(null); }}
+                    className="px-4 py-2 bg-slate-650 hover:bg-slate-750 text-white rounded-lg font-semibold shadow-soft-sm cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3 text-xs">
+                <p className="text-slate-600 dark:text-slate-350 leading-normal">
+                  Are you sure you want to permanently delete Load <strong>#L-{tripToDelete.id}</strong> (Customer: {tripToDelete.customer})? This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-2.5 mt-2 border-t pt-3">
+                  <button
+                    type="button"
+                    onClick={() => { setShowDeleteModal(false); setTripToDelete(null); }}
+                    className="px-4 py-2 border rounded-lg font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-550 dark:text-slate-455 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelete}
+                    className="px-4 py-2 bg-red-650 hover:bg-red-750 text-white rounded-lg font-semibold shadow-soft-sm cursor-pointer"
+                  >
+                    Delete Load
+                  </button>
+                </div>
               </div>
             )}
           </div>

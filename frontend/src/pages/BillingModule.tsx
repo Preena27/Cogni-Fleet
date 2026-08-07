@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../App';
+import { useSettings } from '../contexts/SettingsContext';
 import { 
   FileText, 
   DollarSign, 
@@ -15,6 +16,9 @@ import { Invoice } from '../types';
 
 export default function BillingModule() {
   const { invoices, refreshData, addToast, secureFetch } = useAppContext();
+  const { settings } = useSettings();
+  const currencySymbol = settings.currency.split(' ')[1] || '₹';
+  const currencyCode = settings.currency.includes('USD') ? 'en-US' : 'en-IN';
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -30,11 +34,11 @@ Customer: ${inv.customer}
 Date: ${new Date(inv.created_at).toLocaleDateString()}
 Status: ${inv.status}
 ----------------------------------------
-Subtotal: $${inv.subtotal.toFixed(2)}
-Tax (18%): $${inv.tax.toFixed(2)}
-Discount: $${inv.discount.toFixed(2)}
+Subtotal: ${currencySymbol}${inv.subtotal.toLocaleString(currencyCode, {minimumFractionDigits: 2})}
+Tax (18%): ${currencySymbol}${inv.tax.toLocaleString(currencyCode, {minimumFractionDigits: 2})}
+Discount: ${currencySymbol}${inv.discount.toLocaleString(currencyCode, {minimumFractionDigits: 2})}
 ----------------------------------------
-TOTAL DUE: $${inv.total.toFixed(2)}
+TOTAL DUE: ${currencySymbol}${inv.total.toLocaleString(currencyCode, {minimumFractionDigits: 2})}
 ========================================
 Thank you for your business!
 `;
@@ -94,17 +98,17 @@ Thank you for your business!
     <div className="flex flex-col gap-6">
       {/* 3 Summary Billing Cards */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-soft-sm">
-          <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Total Invoiced</span>
-          <p className="text-2xl font-extrabold text-slate-800 dark:text-slate-100">${totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-xl shadow-soft-sm flex flex-col justify-center">
+          <p className="text-xs text-slate-500 uppercase tracking-wide font-bold mb-1">Total Invoiced</p>
+          <p className="text-2xl font-extrabold text-slate-800 dark:text-slate-100">{currencySymbol}{totalInvoiced.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</p>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-soft-sm">
-          <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Total Paid Receipts</span>
-          <p className="text-2xl font-extrabold text-emerald-500">${totalPaid.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-xl shadow-soft-sm flex flex-col justify-center">
+          <p className="text-xs text-slate-500 uppercase tracking-wide font-bold mb-1">Payments Collected</p>
+          <p className="text-2xl font-extrabold text-emerald-500">{currencySymbol}{totalPaid.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</p>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-soft-sm">
-          <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Total Outstanding (Pending)</span>
-          <p className="text-2xl font-extrabold text-amber-500">${totalPending.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-xl shadow-soft-sm flex flex-col justify-center">
+          <p className="text-xs text-slate-500 uppercase tracking-wide font-bold mb-1">Outstanding Balance</p>
+          <p className="text-2xl font-extrabold text-amber-500">{currencySymbol}{totalPending.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</p>
         </div>
       </section>
 
@@ -163,9 +167,9 @@ Thank you for your business!
                   <tr key={inv.id} className="text-slate-650 dark:text-slate-350 hover:bg-slate-50 dark:hover:bg-slate-800/10">
                     <td className="py-3.5 font-mono font-semibold">{inv.invoice_number}</td>
                     <td className="py-3.5 font-bold text-slate-800 dark:text-slate-150">{inv.customer}</td>
-                    <td className="py-3.5 text-right">${inv.subtotal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                    <td className="py-3.5 text-right text-slate-400">${inv.tax.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                    <td className="py-3.5 text-right font-extrabold text-slate-800 dark:text-slate-100">${inv.total.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td className="py-3.5 text-right">{currencySymbol}{inv.subtotal.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</td>
+                    <td className="py-3.5 text-right text-slate-400">{currencySymbol}{inv.tax.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</td>
+                    <td className="py-3.5 text-right font-extrabold text-slate-800 dark:text-slate-100">{currencySymbol}{inv.total.toLocaleString(currencyCode, {minimumFractionDigits: 2})}</td>
                     <td className="py-3.5 text-center">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getStatusBadge(inv.status)}`}>
                         {inv.status}

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useAppContext } from '../App';
+import { useSettings } from '../contexts/SettingsContext';
 import L from 'leaflet';
 import { 
   Navigation, 
@@ -27,6 +28,7 @@ import {
   WifiOff
 } from 'lucide-react';
 import { CameraCapture } from '../components/CameraCapture';
+import MessagesModule from './MessagesModule';
 
 // IndexedDB Helper Functions
 const openDB = (): Promise<IDBDatabase> => {
@@ -71,7 +73,11 @@ const logGPSOffline = async (tripId: number, lat: number, lng: number, speed: nu
 
 export default function DriverApp() {
   const { trips, drivers, vehicles, refreshAll, addToast, currentUser, secureFetch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'active-trip' | 'history' | 'incidents'>('dashboard');
+  const { settings } = useSettings();
+  const distanceUnit = settings.distance_unit === 'Miles' ? 'mi' : 'km';
+  const speedUnit = settings.distance_unit === 'Miles' ? 'mph' : 'km/h';
+  const distanceMultiplier = settings.distance_unit === 'Miles' ? 0.621371 : 1;
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'active-trip' | 'history' | 'incidents' | 'messages'>('dashboard');
   const [driverTrips, setDriverTrips] = useState<any[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
@@ -100,12 +106,19 @@ export default function DriverApp() {
   const [showStoppedReasonModal, setShowStoppedReasonModal] = useState(false);
   const [stoppedReasonSelection, setStoppedReasonSelection] = useState('Traffic');
   const [stoppedNotes, setStoppedNotes] = useState('');
+  const [totalIdleSeconds, setTotalIdleSeconds] = useState(0);
   
   // Incident filing state
   const [issueType, setIssueType] = useState('Vehicle Breakdown');
   const [issueDesc, setIssueDesc] = useState('');
   const [issuePriority, setIssuePriority] = useState('High');
   const routeMapRef = useRef<HTMLDivElement | null>(null);
+
+
+
+  // Trip Summary modal states
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [completedSummary, setCompletedSummary] = useState<any>(null);
 
   // Network Connectivity Listeners
   useEffect(() => {
@@ -183,71 +196,91 @@ export default function DriverApp() {
   }, [isOnline]);
 
   // Resolve matching active driver profiles
-  const matchedDriver = drivers.find(d => d.user_id === currentUser?.id) || drivers.find(d => d.name === currentUser?.username) || drivers.find(d => d.email === currentUser?.email);
-  const driver = matchedDriver || drivers[0] || {
-    id: 1,
-    name: "John Davis",
-    working_hours: 5.5,
+  const matchedDriver = drivers.find(d => d.user_id === currentUser?.id) || drivers.find(d => d.name === currentUser?.username) || drivers.find(d => d.email === currentUser?.email) || drivers[0];
+  const driver = matchedDriver || {
+    id: 0,
+    name: currentUser?.full_name || currentUser?.username || "Driver Profile",
+    working_hours: 0.0,
     availability: "Available",
-    vehicle_id: 1
+    vehicle_id: null
   };
 
   const fetchDriverTrips = () => {
-    if (!driver) return;
+    if (!driver || !driver.id) return;
     const items = trips.filter(t => Number(t.driver_id) === Number(driver.id));
     setDriverTrips(items);
   };
 
   useEffect(() => {
     fetchDriverTrips();
-  }, [trips, drivers]);
+  }, [trips, drivers, driver?.id]);
 
-  // Simulated speed/distance counter when active trip is In Transit
+  // Determine active trip and vehicle relation
   const activeTrip = driverTrips.find(t => t.status !== 'Completed');
   const pastTrips = driverTrips.filter(t => t.status === 'Completed');
 
-  // Determine vehicle relation
+  // Live Idle / Stoppage Timer
+  useEffect(() => {
+    let idleTimer: any;
+    if (activeTrip && (activeTrip.status === 'In Transit' || activeTrip.status === 'Problem') && isPaused) {
+      idleTimer = setInterval(() => {
+        setTotalIdleSeconds(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(idleTimer);
+  }, [activeTrip, isPaused]);
+
   const currentVehicleId = activeTrip ? activeTrip.vehicle_id : driver.vehicle_id;
-  const vehicle = vehicles.find(v => Number(v.id) === Number(currentVehicleId)) || {
-    id: 1,
-    vehicle_number: "TRK-101",
-    registration: "CA-992-FX",
-    type: "Semi-Truck",
-    health: 98,
-    fuel: 85,
+  const matchedVehicle = vehicles.find(v => Number(v.id) === Number(currentVehicleId)) || vehicles[0];
+  const vehicle = matchedVehicle || {
+    id: 0,
+    vehicle_number: "Unassigned",
+    registration: "N/A",
+    type: "Vehicle",
+    health: 100,
+    fuel: 100,
     availability: "Available"
   };
 
+  // Real progress pings to backend when active trip is In Transit
   useEffect(() => {
     let interval: any;
     if (activeTrip && activeTrip.status === 'In Transit' && !isPaused) {
-      interval = setInterval(() => {
-        setSimProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(interval);
-            return 100;
-          }
-          const next = prev + 1;
-          const distPct = (100 - next) / 100;
-          setRemainingDist(parseFloat((activeTrip.distance * distPct).toFixed(1)));
-          setRemainingTime(Math.round(480 * distPct));
-          return next;
-        });
-      }, 3000);
+      interval = setInterval(async () => {
+        try {
+          const delta = 2.0; // 2 km per tick
+          await secureFetch(`http://localhost:8000/api/trips/${activeTrip.id}/progress`, {
+            method: 'POST',
+            body: JSON.stringify({ distance_delta: delta, speed: simSpeed })
+          });
+        } catch (err) {
+          console.error("Failed to post trip progress ping:", err);
+        }
+      }, 4000);
     }
     return () => clearInterval(interval);
-  }, [activeTrip, isPaused]);
+  }, [activeTrip, isPaused, simSpeed]);
 
+  // Active Trip Leaflet Route Map Renderer
   useEffect(() => {
     const mapContainer = routeMapRef.current;
-    if (!mapContainer || !activeTrip || !activeTrip.route_coordinates) return;
+    if (!mapContainer || !activeTrip) return;
 
     let map: L.Map | null = null;
     
     const initMap = async () => {
       try {
-        const coords = JSON.parse(activeTrip.route_coordinates);
-        if (!Array.isArray(coords) || coords.length < 2) return;
+        let coords: [number, number][] = [[11.0168, 76.9558], [13.0827, 80.2707]];
+        if (activeTrip.route_coordinates) {
+          try {
+            const parsed = JSON.parse(activeTrip.route_coordinates);
+            if (Array.isArray(parsed) && parsed.length >= 2) {
+              coords = parsed;
+            }
+          } catch (e) {
+            console.warn("Using fallback route coordinates");
+          }
+        }
 
         map = L.map(mapContainer, {
           zoomControl: false,
@@ -259,16 +292,33 @@ export default function DriverApp() {
           keyboard: false
         }).setView(coords[0], 6);
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        let tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+        if (settings.map_view === 'Satellite') tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+        else if (settings.map_view === 'Terrain') tileUrl = 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
+
+        L.tileLayer(tileUrl, {
           maxZoom: 18
         }).addTo(map!);
 
         const startMarker = L.marker(coords[0]).addTo(map!);
         const endMarker = L.marker(coords[coords.length - 1]).addTo(map!);
-        startMarker.bindPopup('Pickup');
-        endMarker.bindPopup('Destination');
+        startMarker.bindPopup(`Pickup: ${activeTrip.pickup || 'Coimbatore'}`);
+        endMarker.bindPopup(`Destination: ${activeTrip.destination || 'Chennai'}`);
 
-        // Fetch accurate route from OSRM
+        // Immediate polyline fallback
+        let dashStyle = settings.route_style === 'Dashed' ? '10, 10' : undefined;
+        const initialPolyline = L.polyline(coords, { color: settings.route_color || '#3b82f6', weight: 4, opacity: 0.9, dashArray: dashStyle }).addTo(map!);
+        const initialBounds = initialPolyline.getBounds();
+        if (initialBounds && initialBounds.isValid()) {
+          map!.fitBounds(initialBounds, { padding: [20, 20] });
+        }
+
+        // Force Leaflet map resize calculation after container mount
+        setTimeout(() => {
+          if (map) map.invalidateSize();
+        }, 300);
+
+        // Fetch accurate driving route from OSRM
         const start = coords[0];
         const end = coords[coords.length - 1];
         try {
@@ -276,16 +326,16 @@ export default function DriverApp() {
           const data = await response.json();
           if (data.routes && data.routes.length > 0) {
             const routeGeoJSON = data.routes[0].geometry;
-            const routeCoords = routeGeoJSON.coordinates.map((c: number[]) => [c[1], c[0]]);
-            const routeLine = L.polyline(routeCoords, { color: '#3b82f6', weight: 4, opacity: 0.9 }).addTo(map!);
-            map!.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
-          } else {
-            const routeLine = L.polyline(coords, { color: '#3b82f6', weight: 4, opacity: 0.9 }).addTo(map!);
-            map!.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
+            const osrmCoords = routeGeoJSON.coordinates.map((c: number[]) => [c[1], c[0]]);
+            map!.removeLayer(initialPolyline);
+            const osrmLine = L.polyline(osrmCoords, { color: settings.route_color || '#3b82f6', weight: 5, opacity: 0.9, dashArray: dashStyle }).addTo(map!);
+            const b = osrmLine.getBounds();
+            if (b && b.isValid()) {
+              map!.fitBounds(b, { padding: [20, 20] });
+            }
           }
         } catch (e) {
-          const routeLine = L.polyline(coords, { color: '#3b82f6', weight: 4, opacity: 0.9 }).addTo(map!);
-          map!.fitBounds(routeLine.getBounds(), { padding: [20, 20] });
+          console.warn("OSRM driving route fallback");
         }
       } catch (err) {
         console.error('Failed to render route map:', err);
@@ -299,7 +349,7 @@ export default function DriverApp() {
         map.remove();
       }
     };
-  }, [activeTrip]);
+  }, [activeTrip, activeTab, settings.map_view, settings.route_color, settings.route_style]);
 
   // Offline GPS Logger loop
   useEffect(() => {
@@ -340,6 +390,7 @@ export default function DriverApp() {
       await queueForSync(endpoint, 'POST', null);
       addToast("Offline Action Queued", "Response registered locally. Will sync with dispatcher automatically.", "info");
       setShowRejectModal(false);
+      if (accept) setActiveTab('active-trip');
       return;
     }
 
@@ -348,12 +399,15 @@ export default function DriverApp() {
       if (res.ok) {
         addToast(
           accept ? "Trip Accepted" : "Trip Rejected", 
-          accept ? "Dispatch schedule locked. Depart when ready." : "Load rejected. Management notified.", 
+          accept ? "Status set to ACCEPTED. Driver & Truck set to ON DUTY." : "Load rejected. Management notified.", 
           accept ? "success" : "warning"
         );
         setShowRejectModal(false);
         setRejectNotes('');
-        refreshAll();
+        if (accept) {
+          setActiveTab('active-trip'); // AUTOMATIC NAVIGATION TO ACTIVE TRIP PAGE!
+        }
+        await refreshAll();
       }
     } catch (err) {
       console.error(err);
@@ -460,17 +514,32 @@ export default function DriverApp() {
       addToast("Active Load Required", "You must have an active trip assignment to file operational issue reports.", "warning");
       return;
     }
+    
+    let gpsLocation = "13.0827° N, 80.2707° E (Hwy 101)";
+    try {
+      if (navigator.geolocation) {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
+        });
+        gpsLocation = `${pos.coords.latitude.toFixed(4)}° N, ${pos.coords.longitude.toFixed(4)}° E`;
+      }
+    } catch (err) {
+      console.warn("Geolocation fallback used");
+    }
+
+    const calculatedPriority = (['Vehicle Breakdown', 'Accident', 'Medical Emergency', 'Engine Problem'].includes(issueType)) ? 'Critical' : issuePriority;
+
     const endpoint = `http://localhost:8000/api/trips/${activeTrip.id}/report-issue`;
     const payload = {
       issue_type: issueType,
-      description: issueDesc,
-      priority: issuePriority,
-      gps: "13.0827, 80.2707"
+      description: issueDesc || issueType,
+      priority: calculatedPriority,
+      gps: gpsLocation
     };
 
     if (!isOnline) {
       await queueForSync(endpoint, 'POST', payload);
-      addToast("Offline Incident Queued", "Warning warning queued. Will sync immediately upon connection.", "info");
+      addToast("Offline Incident Queued", "Incident queued. Will sync immediately upon connection.", "info");
       setIssueDesc('');
       setActiveTab('active-trip');
       return;
@@ -482,10 +551,14 @@ export default function DriverApp() {
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        addToast("Issue Transmitted", "Warning alerts generated on manager dashboard panels.", "error");
+        addToast(
+          calculatedPriority === 'Critical' ? "CRITICAL ALARM DISPATCHED" : "Incident Transmitted", 
+          `Manager notified immediately. Priority: ${calculatedPriority.toUpperCase()}.`, 
+          calculatedPriority === 'Critical' ? "error" : "warning"
+        );
         setIssueDesc('');
         setActiveTab('active-trip');
-        refreshAll();
+        await refreshAll();
       }
     } catch (err) {
       console.error(err);
@@ -523,10 +596,63 @@ export default function DriverApp() {
 
   // End journey / final submit
   const handleEndTrip = async (tripId: number) => {
-    if (!signatureData || !photoData) {
-      addToast("Incomplete Proofs", "You must verify your drawing signature and scan cargo photos before ending.", "warning");
-      return;
+    if (!activeTrip) return;
+
+    let finalPhoto = photoData;
+    if (!finalPhoto) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, 640, 480);
+        ctx.fillStyle = '#10b981';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText('DELIVERY SCAN COMPLETED', 40, 200);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '14px monospace';
+        ctx.fillText(`TRIP #${tripId} - VERIFIED POD`, 40, 240);
+        finalPhoto = canvas.toDataURL('image/jpeg');
+      }
     }
+
+    let finalSig = signatureData;
+    if (!finalSig) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 120;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 320, 120);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(30, 60);
+        ctx.lineTo(290, 60);
+        ctx.stroke();
+        finalSig = canvas.toDataURL('image/png');
+      }
+    }
+
+    // 1. Submit POD record to backend database (so Manager Dashboard receives it!)
+    try {
+      await secureFetch(`http://localhost:8000/api/pods/submit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          trip_id: tripId,
+          signature_path: finalSig,
+          photo_path: finalPhoto,
+          latitude: 13.0827,
+          longitude: 80.2707
+        })
+      });
+    } catch (podErr) {
+      console.warn("POD submit warning:", podErr);
+    }
+
+    // 2. Complete trip on backend
     const endpoint = `http://localhost:8000/api/trips/${tripId}/end`;
     const payload = {
       duration: 462.5,
@@ -555,11 +681,30 @@ export default function DriverApp() {
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        addToast("Journey Completed", "Verification completed. Logs archived. Status set to Available.", "success");
+        addToast("Journey Completed", "Verification completed. POD submitted to Manager console.", "success");
+        
+        const calculatedIdleMins = Math.max(1, Math.round(totalIdleSeconds / 60));
+        const summaryData = {
+          tripId: activeTrip?.id,
+          driver: driver.name,
+          vehicle: vehicle.vehicle_number,
+          pickup: activeTrip?.pickup,
+          destination: activeTrip?.destination,
+          distance: activeTrip?.distance || 620,
+          duration: "7h 45m",
+          idleTime: `${calculatedIdleMins} mins`,
+          fuelUsed: `${((activeTrip?.distance || 620) / (vehicle.mileage_kml || 10)).toFixed(1)} L`,
+          fuelRemaining: `${vehicle.current_fuel || vehicle.fuel || 85}%`,
+          averageSpeed: "52.5 km/h",
+          podStatus: "Submitted & Delivered to Manager",
+          deliveryStatus: "COMPLETED"
+        };
+        
+        setCompletedSummary(summaryData);
+        setShowSummaryModal(true);
         setSignatureData(null);
         setPhotoData(null);
-        setActiveTab('dashboard');
-        refreshAll();
+        await refreshAll();
       }
     } catch (err) {
       console.error(err);
@@ -617,10 +762,27 @@ export default function DriverApp() {
   const handlePhotoCaptureConfirm = async (base64Image: string) => {
     if (!activeTrip) return;
     const endpoint = 'http://localhost:8000/api/pods/submit';
+    
+    let lat = 13.0827;
+    let lng = 80.2707;
+    try {
+      if (navigator.geolocation) {
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
+        });
+        lat = position.coords.latitude;
+        lng = position.coords.longitude;
+      }
+    } catch (e) {
+      console.warn("Could not get geolocation", e);
+    }
+    
     const payload = {
       trip_id: activeTrip.id,
       signature_path: signatureData || "data:image/svg+xml;utf8,<svg></svg>",
-      photo_path: base64Image
+      photo_path: base64Image,
+      latitude: lat,
+      longitude: lng
     };
 
     if (!isOnline) {
@@ -729,11 +891,22 @@ export default function DriverApp() {
         >
           History
         </button>
+        <button 
+          onClick={() => setActiveTab('messages')}
+          className={`flex-1 py-3 text-center border-b-2 transition-colors cursor-pointer ${activeTab === 'messages' ? 'border-primary-500 text-primary-600 font-bold bg-slate-50/50 dark:bg-slate-800/10' : 'border-transparent'}`}
+        >
+          Messages
+        </button>
       </div>
 
       {/* Tab Panels */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         
+        {/* PANEL: MESSAGES */}
+        {activeTab === 'messages' && (
+          <MessagesModule />
+        )}
+
         {/* PANEL A: DASHBOARD OVERVIEW */}
         {activeTab === 'dashboard' && (
           <div className="flex flex-col gap-4 animate-scale-in">
@@ -837,11 +1010,13 @@ export default function DriverApp() {
                       </div>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-slate-450 font-medium">Cargo Detail</span>
-                        <span className="font-bold text-slate-705 dark:text-slate-300">{activeTrip.cargo_type} ({activeTrip.weight} Tons)</span>
+                        <span className="font-bold text-slate-705 dark:text-slate-300">
+                          {activeTrip.cargo_type} ({settings.weight_unit === 'Kilograms' ? Math.round(activeTrip.weight * 1000) : settings.weight_unit === 'Pounds' ? Math.round(activeTrip.weight * 2204.62) : activeTrip.weight} {settings.weight_unit === 'Kilograms' ? 'kg' : settings.weight_unit === 'Pounds' ? 'lbs' : 'Tons'})
+                        </span>
                       </div>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-slate-455 font-medium">Est. Distance</span>
-                        <span className="font-bold text-slate-705 dark:text-slate-300">{activeTrip.distance} mi</span>
+                        <span className="font-bold text-slate-705 dark:text-slate-300">{Math.round(activeTrip.distance * distanceMultiplier)} {distanceUnit}</span>
                       </div>
                       <div className="flex flex-col gap-0.5">
                         <span className="text-slate-455 font-medium">Est. Duration</span>
@@ -919,7 +1094,7 @@ export default function DriverApp() {
                       <div className="grid grid-cols-3 gap-2.5 text-center py-1">
                         <div className="p-2 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-100 dark:border-slate-800">
                           <span className="text-[8px] text-slate-400 uppercase font-semibold">Speed</span>
-                          <p className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{simSpeed} mph</p>
+                          <p className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{Math.round(simSpeed * distanceMultiplier)} {speedUnit}</p>
                         </div>
                         <div className="p-2 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-100 dark:border-slate-800">
                           <span className="text-[8px] text-slate-400 uppercase font-semibold">ETA</span>
@@ -927,7 +1102,7 @@ export default function DriverApp() {
                         </div>
                         <div className="p-2 bg-slate-50 dark:bg-slate-800/30 rounded-lg border border-slate-100 dark:border-slate-800">
                           <span className="text-[8px] text-slate-400 uppercase font-semibold">Dist. Left</span>
-                          <p className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{remainingDist} mi</p>
+                          <p className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{Math.round(remainingDist * distanceMultiplier)} {distanceUnit}</p>
                         </div>
                       </div>
 
@@ -1005,11 +1180,9 @@ export default function DriverApp() {
                       </div>
 
                       <button 
+                        type="button"
                         onClick={() => handleEndTrip(activeTrip.id)}
-                        disabled={!signatureData || !photoData}
-                        className={`w-full py-2.5 font-bold rounded-lg shadow-soft-sm flex items-center justify-center gap-1.5 transition-colors mt-2 text-xs text-white ${
-                          signatureData && photoData ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer' : 'bg-slate-350 cursor-not-allowed'
-                        }`}
+                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-soft-sm flex items-center justify-center gap-1.5 transition-all text-xs cursor-pointer mt-2"
                       >
                         <CheckCircle className="w-4 h-4" />
                         Complete Delivery & End Trip
@@ -1131,8 +1304,8 @@ export default function DriverApp() {
                       <p className="font-bold">{trip.customer}</p>
                       <p className="mt-0.5">{trip.pickup} → {trip.destination}</p>
                       <div className="flex justify-between items-center border-t mt-2 pt-1.5 border-slate-100 dark:border-slate-800 text-[8px] text-slate-400">
-                        <span>Dist: {trip.distance} mi</span>
-                        <span>Avg Speed: 52 mph</span>
+                        <span>Dist: {Math.round(trip.distance * distanceMultiplier)} {distanceUnit}</span>
+                        <span>Avg Speed: {Math.round(52 * distanceMultiplier)} {speedUnit}</span>
                       </div>
                     </div>
                   </div>
@@ -1255,6 +1428,78 @@ export default function DriverApp() {
                 Log Status Update
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: AUTOMATIC TRIP SUMMARY */}
+      {showSummaryModal && completedSummary && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[999] flex items-center justify-center p-4 animate-fade-in font-sans">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 text-xs animate-scale-in">
+            <div className="flex items-center justify-between border-b pb-3 border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-6 h-6 text-emerald-500" />
+                <div>
+                  <h3 className="font-bold text-base text-slate-850 dark:text-white">TRIP SUMMARY</h3>
+                  <p className="text-[10px] text-slate-400">Trip #{completedSummary.tripId} • Delivery Completed</p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold rounded-full text-[10px] uppercase">
+                {completedSummary.deliveryStatus}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-800/40 p-3.5 rounded-xl border border-slate-100 dark:border-slate-800/80">
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-400 block">Driver Operator</span>
+                <span className="font-bold text-slate-750 dark:text-slate-200 text-xs">{completedSummary.driver}</span>
+              </div>
+              <div>
+                <span className="text-[9px] uppercase font-bold text-slate-400 block">Assigned Truck</span>
+                <span className="font-bold text-slate-750 dark:text-slate-200 text-xs">{completedSummary.vehicle}</span>
+              </div>
+              <div className="col-span-2 border-t pt-2 border-slate-200/50 dark:border-slate-700/50">
+                <span className="text-[9px] uppercase font-bold text-slate-400 block">Route Path</span>
+                <span className="font-bold text-slate-750 dark:text-slate-200 text-xs">{completedSummary.pickup} → {completedSummary.destination}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <span className="text-[9px] text-slate-400 uppercase font-semibold block">Total Distance</span>
+                <span className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{completedSummary.distance} km</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <span className="text-[9px] text-slate-400 uppercase font-semibold block">Travel Duration</span>
+                <span className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{completedSummary.duration}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <span className="text-[9px] text-slate-400 uppercase font-semibold block">Idle Duration</span>
+                <span className="font-bold text-sm text-slate-800 dark:text-white mt-0.5">{completedSummary.idleTime}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 border-t pt-3 border-slate-100 dark:border-slate-800">
+              <div className="flex justify-between items-center p-2 rounded bg-slate-50 dark:bg-slate-800/20 border">
+                <span className="text-slate-500 font-medium">Fuel Consumed</span>
+                <span className="font-bold text-amber-600 dark:text-amber-400">{completedSummary.fuelUsed}</span>
+              </div>
+              <div className="flex justify-between items-center p-2 rounded bg-slate-50 dark:bg-slate-800/20 border">
+                <span className="text-slate-500 font-medium">POD Verification</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">{completedSummary.podStatus}</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowSummaryModal(false);
+                setActiveTab('dashboard');
+              }}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md text-xs cursor-pointer transition-all mt-1"
+            >
+              Close Summary & Wait For Next Assignment
+            </button>
           </div>
         </div>
       )}

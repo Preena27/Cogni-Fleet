@@ -1,0 +1,23 @@
+# Python & Environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.db
+fleet.db
+backend/fleet.db
+
+# Node & Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+*.tsbuildinfo
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

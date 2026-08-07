@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 
 export default function PODModule() {
-  const { pods, trips, refreshData, addToast, secureFetch } = useAppContext();
+  const { pods, trips, drivers, vehicles, refreshData, addToast, secureFetch } = useAppContext();
 
   const handleApprove = async (podId: number) => {
     try {
@@ -145,12 +145,22 @@ export default function PODModule() {
                       Trip #{pod.trip_id} • POD Record
                     </h4>
                     <p className="text-[10px] text-slate-400 mt-0.5">
-                      Customer Client: <span className="font-bold text-slate-655 dark:text-slate-300">{linkedTrip?.customer || 'Unknown'}</span>
+                      Customer: <span className="font-bold text-slate-655 dark:text-slate-300">{linkedTrip?.customer || 'Unknown'}</span>
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Destination: <span className="font-bold text-slate-655 dark:text-slate-300">{linkedTrip?.destination || 'Unknown'}</span>
                     </p>
                   </div>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getStatusStyle(pod.status)}`}>
                     {pod.status}
                   </span>
+                </div>
+                
+                {/* Driver & Vehicle info */}
+                <div className="flex flex-col text-[10px] text-slate-500 mt-1 gap-1">
+                   <p>Driver: <span className="font-bold text-slate-700 dark:text-slate-300">{drivers.find(d => d.id === pod.driver_id)?.name || 'N/A'}</span></p>
+                   <p>Vehicle: <span className="font-bold text-slate-700 dark:text-slate-300">{vehicles.find(v => v.id === pod.vehicle_id)?.vehicle_number || 'N/A'}</span></p>
+                   <p>Location: <span className="font-bold text-slate-700 dark:text-slate-300">{pod.latitude ? `${pod.latitude.toFixed(4)}, ${pod.longitude?.toFixed(4)}` : 'N/A'}</span></p>
                 </div>
 
                 {/* Grid image attachments */}
@@ -202,27 +212,21 @@ export default function PODModule() {
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Delete
                   </button>
-                  {pod.status === 'Pending' && (
-                    <>
-                      <button 
-                        onClick={() => handleReject(pod.id)}
-                        className="px-2.5 py-1.5 border hover:bg-red-50 dark:hover:bg-red-950/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" /> Reject
-                      </button>
-                      <button 
-                        onClick={() => handleRequestReupload(pod.id)}
-                        className="px-2.5 py-1.5 border hover:bg-blue-50 dark:hover:bg-blue-950/20 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400 rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <Clock className="w-3.5 h-3.5" /> Request Re-upload
-                      </button>
-                      <button 
-                        onClick={() => handleApprove(pod.id)}
-                        className="px-2.5 py-1.5 bg-emerald-650 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Verify & Approve
-                      </button>
-                    </>
+                  {pod.status !== 'Rejected' && (
+                    <button 
+                      onClick={() => handleReject(pod.id)}
+                      className="px-2.5 py-1.5 border hover:bg-red-50 dark:hover:bg-red-950/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" /> Reject
+                    </button>
+                  )}
+                  {pod.status !== 'Approved' && (
+                    <button 
+                      onClick={() => handleApprove(pod.id)}
+                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-soft-sm flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" /> Verify & Approve
+                    </button>
                   )}
                 </div>
               </div>

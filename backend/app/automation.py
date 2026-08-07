@@ -87,11 +87,6 @@ async def run_driver_response_pipeline(trip_id: int, accepted: bool, reason: str
         db.commit()
         
         await log_automation_step(db, "Driver Accepted", "Update Asset Status", f"Driver {driver_name} accepted Trip #{trip_id}. Vehicle {vehicle_no} and Driver status set to 'On Duty'.", manager_id=trip.manager_id, driver_id=trip.driver_id, vehicle_number=vehicle_no)
-        
-        # Start Trip simulation step
-        trip.status = "Loading"
-        db.commit()
-        await log_automation_step(db, "Driver Accepted", "Trip Starts", f"Trip #{trip_id} changed status to 'Loading' at Warehouse dock.", manager_id=trip.manager_id, driver_id=trip.driver_id, vehicle_number=vehicle_no)
     else:
         # Rejected
         old_driver_id = trip.driver_id
@@ -216,16 +211,92 @@ async def run_trip_completed_pipeline(trip_id: int, db: Session):
     driver_name = driver.name if driver else "Unknown Driver"
     vehicle_no = vehicle.vehicle_number if vehicle else "Unknown Vehicle"
     
+    # Calculate automatic fuel consumption and cost
+    mileage_kml = getattr(vehicle, "mileage_kml", 10.0) if vehicle and getattr(vehicle, "mileage_kml", 0) > 0 else 10.0
+    trip_distance = trip.distance if trip.distance and trip.distance > 0 else 250.0
+    trip.distance = trip_distance
+    fuel_used = round(trip_distance / mileage_kml, 2)
+    fuel_price = trip.fuel_price if (trip.fuel_price and trip.fuel_price > 0) else 95.0
+    fuel_cost = round(fuel_used * fuel_price, 2)
+    
+    trip.fuel_used = fuel_used
+    trip.fuel_price = fuel_price
+    trip.fuel_cost = fuel_cost
+    
     # Reset statuses
     trip.status = "Completed"
     if driver:
         driver.availability = "Available"
         driver.working_hours += 6.5  # Add trip hours
+        driver.current_location = trip.destination
     if vehicle:
         vehicle.availability = "Available"
         vehicle.current_trip_id = None
         vehicle.mileage += trip.distance
-        vehicle.fuel = max(15, vehicle.fuel - 35)  # Burn fuel
+        vehicle.odometer = (vehicle.odometer or 0) + trip.distance
+        
+        # Location tracking
+        vehicle.current_location = trip.destination
+        
+        # Fuel calculations
+        capacity = vehicle.fuel_capacity or 100.0
+        current_f = vehicle.current_fuel or 100.0
+        vehicle.current_fuel = max(0, current_f - fuel_used)
+        if capacity > 0:
+            vehicle.fuel = int((vehicle.current_fuel / capacity) * 100)
+        else:
+            vehicle.fuel = 0
+            
+        # Maintenance calculations
+        next_due = vehicle.next_service_due or 10000.0
+        remaining = next_due - vehicle.odometer
+        
+        if remaining <= 0:
+            vehicle.availability = "Maintenance Due"
+            existing_alert = db.query(Alert).filter(
+                Alert.vehicle_number == vehicle_no,
+                Alert.title == f"Maintenance Overdue: {vehicle_no}",
+                Alert.resolved == False
+            ).first()
+            if not existing_alert:
+                db.add(Alert(
+                    severity="Critical",
+                    priority="Critical",
+                    title=f"Maintenance Overdue: {vehicle_no}",
+                    description=f"Vehicle {vehicle_no} is overdue for maintenance by {-remaining} km.",
+                    vehicle_number=vehicle_no,
+                    manager_id=trip.manager_id
+                ))
+        elif remaining <= 500:
+            existing_alert = db.query(Alert).filter(
+                Alert.vehicle_number == vehicle_no,
+                Alert.title == f"Maintenance Required Soon: {vehicle_no}",
+                Alert.resolved == False
+            ).first()
+            if not existing_alert:
+                db.add(Alert(
+                    severity="High",
+                    priority="High",
+                    title=f"Maintenance Required Soon: {vehicle_no}",
+                    description=f"Vehicle {vehicle_no} requires maintenance in {remaining} km.",
+                    vehicle_number=vehicle_no,
+                    manager_id=trip.manager_id
+                ))
+        elif remaining <= 1000:
+            existing_alert = db.query(Alert).filter(
+                Alert.vehicle_number == vehicle_no,
+                Alert.title == f"Maintenance Due Soon: {vehicle_no}",
+                Alert.resolved == False
+            ).first()
+            if not existing_alert:
+                db.add(Alert(
+                    severity="Medium",
+                    priority="Warning",
+                    title=f"Maintenance Due Soon: {vehicle_no}",
+                    description=f"Vehicle {vehicle_no} requires maintenance in {remaining} km.",
+                    vehicle_number=vehicle_no,
+                    manager_id=trip.manager_id
+                ))
     db.commit()
     
     await log_automation_step(db, "Trip Completed", "Update Analytics", f"Trip #{trip_id} marked Completed. Driver/Vehicle returned to available pool. Total distance {trip.distance} km logged.", manager_id=trip.manager_id, driver_id=trip.driver_id, vehicle_number=vehicle_no)

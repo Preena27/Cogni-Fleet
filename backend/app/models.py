@@ -3,6 +3,15 @@ from sqlalchemy.orm import relationship
 import datetime
 from .database import Base
 
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    is_read = Column(Boolean, default=False)
+
 # Many-to-many relationship helper table for Stops in a Trip
 # In our database, we can also store stops as a JSON/serialized string in Trip, which is simpler and highly flexible for SQLite.
 # Let's store stops, timeline, route, documents, history, and notes as JSON/Text strings to ensure SQLite compatibility and ease of use.
@@ -17,9 +26,42 @@ class User(Base):
     full_name = Column(String, nullable=True)
     company_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    timezone = Column(String, default="UTC")
+    language = Column(String, default="English")
+    profile_picture = Column(String, nullable=True)
     
     # Relationship to driver model if role is driver
     driver_profile = relationship("Driver", back_populates="user", uselist=False, foreign_keys="Driver.user_id")
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    distance_unit = Column(String, default="Kilometers")
+    weight_unit = Column(String, default="Kilograms")
+    temperature_unit = Column(String, default="Celsius")
+    currency = Column(String, default="INR ₹")
+    timezone = Column(String, default="Asia/Kolkata")
+    date_format = Column(String, default="DD/MM/YYYY")
+    time_format = Column(String, default="24-hour")
+    language = Column(String, default="English")
+    region = Column(String, default="India")
+    map_view = Column(String, default="Street")
+    route_style = Column(String, default="Solid")
+    route_color = Column(String, default="#3b82f6")
+    traffic_enabled = Column(Boolean, default=True)
+    poi_enabled = Column(Boolean, default=False)
+    building_3d_enabled = Column(Boolean, default=False)
+    vehicle_markers_enabled = Column(Boolean, default=True)
+    route_enabled = Column(Boolean, default=True)
+    destination_enabled = Column(Boolean, default=True)
+    route_optimization_mode = Column(String, default="Balanced")
+    traffic_consideration = Column(Boolean, default=True)
+    auto_route_recalculation = Column(Boolean, default=True)
+    route_delay_threshold = Column(Integer, default=5)
+    
+    user = relationship("User", backref="settings")
 
 
 class Vehicle(Base):
@@ -31,13 +73,23 @@ class Vehicle(Base):
     capacity = Column(Float, nullable=False)  # in tons
     health = Column(Integer, default=100)  # percentage
     fuel = Column(Integer, default=100)  # percentage
+    current_fuel = Column(Float, default=100.0)
+    fuel_capacity = Column(Float, default=100.0)
     mileage = Column(Float, default=0.0)  # total km
+    odometer = Column(Float, default=0.0)
+    mileage_kml = Column(Float, default=10.0)  # km per litre
+    last_service_date = Column(String, nullable=True)
+    last_service_odometer = Column(Float, default=0.0)
+    service_due_date = Column(String, nullable=True)
+    service_interval = Column(Float, default=10000.0)
+    next_service_due = Column(Float, default=10000.0)
     insurance = Column(String, nullable=True)  # expiry date or policy number
     pollution = Column(String, nullable=True)  # status/expiry
     fitness = Column(String, nullable=True)  # status/expiry
     gps = Column(String, default="Offline")  # "Online", "Offline"
-    latitude = Column(Float, default=37.7749)  # standard location (e.g. SF)
-    longitude = Column(Float, default=-122.4194)
+    latitude = Column(Float, default=13.0827)  # standard location (e.g. Chennai)
+    longitude = Column(Float, default=80.2707)
+    current_location = Column(String, nullable=True)
     speed = Column(Float, default=0.0)
     availability = Column(String, default="Available")  # "Available", "On Duty", "Maintenance"
     current_trip_id = Column(Integer, nullable=True)
@@ -58,6 +110,8 @@ class Driver(Base):
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
     address = Column(String, nullable=True)
+    emergency_contact = Column(String, nullable=True)
+    current_location = Column(String, nullable=True)
     experience = Column(Integer, default=0)  # years
     availability = Column(String, default="Available")  # "Available", "On Duty", "Off Duty"
     working_hours = Column(Float, default=0.0)  # today's hours
@@ -101,6 +155,8 @@ class Trip(Base):
     # Live stats
     eta = Column(String, nullable=True)
     fuel_cost = Column(Float, default=0.0)
+    fuel_used = Column(Float, default=0.0)
+    fuel_price = Column(Float, default=95.0)
     revenue = Column(Float, default=0.0)
     distance = Column(Float, default=0.0)  # total km
     remaining_distance = Column(Float, default=0.0)
@@ -154,6 +210,11 @@ class ProofOfDelivery(Base):
     submitted_at = Column(DateTime, default=datetime.datetime.utcnow)
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=True)
+    vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    
     trip = relationship("Trip", back_populates="pod")
 
 
@@ -178,6 +239,7 @@ class Alert(Base):
     __tablename__ = "alerts"
     id = Column(Integer, primary_key=True, index=True)
     severity = Column(String, default="Medium")  # "Critical", "High", "Medium", "Low", "Resolved"
+    priority = Column(String, default="Information")  # "Information", "Warning", "High", "Critical"
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     vehicle_number = Column(String, nullable=True)
@@ -185,6 +247,7 @@ class Alert(Base):
     location = Column(String, nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     resolved = Column(Boolean, default=False)
+    acknowledged = Column(Boolean, default=False)
     trip_id = Column(Integer, nullable=True)
     driver_id = Column(Integer, nullable=True)
     manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)

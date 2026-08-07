@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../App';
 import { 
   Users, 
@@ -16,6 +17,7 @@ import {
 import { Driver } from '../types';
 
 export default function DriverModule() {
+  const navigate = useNavigate();
   const { drivers, trips, vehicles, refreshData, addToast, secureFetch } = useAppContext();
   const [selectedDriver, setSelectedDriver] = useState<Driver | null>(null);
   const [filterAvailability, setFilterAvailability] = useState<string>('All');
@@ -23,6 +25,10 @@ export default function DriverModule() {
   // Create state for direct message dialog simulation
   const [activeMessageDriver, setActiveMessageDriver] = useState<Driver | null>(null);
   const [messageText, setMessageText] = useState('');
+  
+  // Edit Driver state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editDriverData, setEditDriverData] = useState<Partial<Driver>>({});
 
   // Add Driver states
   const [showAddModal, setShowAddModal] = useState(false);
@@ -33,6 +39,8 @@ export default function DriverModule() {
     confirmPassword: '',
     license: '',
     phone: '',
+    experience: 0,
+    current_location: '',
   });
 
   const handleAddDriver = async (e: React.FormEvent) => {
@@ -49,7 +57,9 @@ export default function DriverModule() {
           username: newDriver.username,
           password: newDriver.password,
           license: newDriver.license,
-          phone: newDriver.phone
+          phone: newDriver.phone,
+          experience: newDriver.experience,
+          current_location: newDriver.current_location
         })
       });
       if (res.ok) {
@@ -62,6 +72,8 @@ export default function DriverModule() {
           confirmPassword: '',
           license: '',
           phone: '',
+          experience: 0,
+          current_location: '',
         });
         refreshData('drivers');
       } else {
@@ -70,6 +82,30 @@ export default function DriverModule() {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDriver) return;
+    try {
+      const res = await secureFetch(`http://localhost:8000/api/drivers/${selectedDriver.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(editDriverData)
+      });
+      if (res.ok) {
+        addToast("Driver Updated", "Driver information updated successfully.", "success");
+        setShowEditModal(false);
+        const updated = await res.json();
+        setSelectedDriver(updated);
+        refreshData('drivers');
+      } else {
+        const err = await res.json();
+        addToast("Update Failed", err.detail || "Could not update driver.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      addToast("Network Error", "Failed to connect to server.", "error");
     }
   };
 
@@ -93,16 +129,33 @@ export default function DriverModule() {
   };
 
   const handleSimulateCall = (name: string) => {
-    addToast("Initiating Connection", `Dialing voice link to driver ${name}... (VoIP Sandbox mode)`, "info");
+    // Replaced with actual tel: link below
   };
 
-  const handleSimulateMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageText.trim() || !activeMessageDriver) return;
     
-    addToast("SMS Broadcasted", `Direct cellular message routed to ${activeMessageDriver.name}: "${messageText}"`, "success");
-    setMessageText('');
-    setActiveMessageDriver(null);
+    try {
+      const res = await secureFetch('http://localhost:8000/api/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          receiver_id: activeMessageDriver.user_id,
+          content: messageText
+        })
+      });
+      
+      if (res.ok) {
+        addToast("Message Sent", `Direct message sent to ${activeMessageDriver.name}.`, "success");
+        setMessageText('');
+        setActiveMessageDriver(null);
+      } else {
+        addToast("Message Failed", "Failed to send message.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      addToast("Network Error", "Could not send message.", "error");
+    }
   };
 
   return (
@@ -166,8 +219,18 @@ export default function DriverModule() {
                       {driver.name.charAt(0)}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <h3 className="font-bold text-sm text-slate-805 dark:text-slate-150 truncate">{driver.name}</h3>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <h3 className="font-bold text-sm text-slate-805 dark:text-slate-150 truncate">{driver.name}</h3>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); navigate('/messages'); }}
+                            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md text-sm cursor-pointer transition-colors"
+                            title={`Chat with ${driver.name}`}
+                          >
+                            💬
+                          </button>
+                        </div>
                         <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${getAvailabilityColor(driver.availability)}`}>
                           {driver.availability}
                         </span>
@@ -213,12 +276,23 @@ export default function DriverModule() {
                 <h3 className="font-bold text-base text-slate-850 dark:text-slate-100">{selectedDriver.name}</h3>
                 <span className="text-xs text-slate-400">Driver License ID: {selectedDriver.license || 'N/A'}</span>
               </div>
-              <button 
-                onClick={() => setSelectedDriver(null)}
-                className="text-xs text-slate-400 hover:text-slate-650"
-              >
-                Close
-              </button>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    setEditDriverData(selectedDriver);
+                    setShowEditModal(true);
+                  }}
+                  className="text-xs font-bold text-primary-600 hover:text-primary-700"
+                >
+                  Edit
+                </button>
+                <button 
+                  onClick={() => setSelectedDriver(null)}
+                  className="text-xs text-slate-400 hover:text-slate-650"
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
             {/* Quick Contacts */}
@@ -264,13 +338,13 @@ export default function DriverModule() {
 
             {/* Simulated Action buttons */}
             <div className="flex flex-col gap-2 mt-2">
-              <button 
-                onClick={() => handleSimulateCall(selectedDriver.name)}
+              <a 
+                href={`tel:${selectedDriver.phone || ''}`}
                 className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-lg text-xs font-bold shadow-soft-sm flex items-center justify-center gap-1.5 transition-colors"
               >
                 <Phone className="w-4 h-4 text-slate-500" />
                 Call Driver
-              </button>
+              </a>
               <button 
                 onClick={() => setActiveMessageDriver(selectedDriver)}
                 className="w-full py-2 bg-primary-600 hover:bg-primary-750 text-white rounded-lg text-xs font-bold shadow-soft-sm flex items-center justify-center gap-1.5 transition-colors"
@@ -287,8 +361,7 @@ export default function DriverModule() {
       {activeMessageDriver && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-md w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in">
-            <h3 className="font-bold text-base text-slate-800 dark:text-slate-100">Send Cellular Broadcast: {activeMessageDriver.name}</h3>
-            <form onSubmit={handleSimulateMessage} className="flex flex-col gap-3 text-xs">
+            <form onSubmit={handleSendMessage} className="flex flex-col gap-3 text-xs">
               <div className="flex flex-col gap-1.5">
                 <label className="font-semibold text-slate-650 dark:text-slate-350">Message Body</label>
                 <textarea 
@@ -386,6 +459,39 @@ export default function DriverModule() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Years of Experience</label>
+                  <select 
+                    required 
+                    value={newDriver.experience}
+                    onChange={e => setNewDriver({...newDriver, experience: parseInt(e.target.value)})}
+                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none"
+                  >
+                    <option value={0}>0 Years (New)</option>
+                    <option value={2}>2 Years</option>
+                    <option value={5}>5 Years</option>
+                    <option value={10}>10+ Years</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Current Location</label>
+                  <select 
+                    required 
+                    value={newDriver.current_location}
+                    onChange={e => setNewDriver({...newDriver, current_location: e.target.value})}
+                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none"
+                  >
+                    <option value="">Select Location</option>
+                    <option value="Coimbatore">Coimbatore</option>
+                    <option value="Salem">Salem</option>
+                    <option value="Chennai">Chennai</option>
+                    <option value="Madurai">Madurai</option>
+                    <option value="Trichy">Trichy</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="flex justify-end gap-2.5 mt-2">
                 <button 
                   type="button" onClick={() => setShowAddModal(false)}
@@ -399,6 +505,65 @@ export default function DriverModule() {
                 >
                   Register Driver
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Driver Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl p-5 max-w-md w-full shadow-soft-lg flex flex-col gap-4 animate-scale-in">
+            <h3 className="font-bold text-base text-slate-805 dark:text-slate-100">Edit Driver</h3>
+            <form onSubmit={handleEditSubmit} className="flex flex-col gap-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Name</label>
+                  <input type="text" required value={editDriverData.name || ''} onChange={e => setEditDriverData({...editDriverData, name: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Phone</label>
+                  <input type="text" value={editDriverData.phone || ''} onChange={e => setEditDriverData({...editDriverData, phone: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Email</label>
+                  <input type="email" value={editDriverData.email || ''} onChange={e => setEditDriverData({...editDriverData, email: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">License</label>
+                  <input type="text" value={editDriverData.license || ''} onChange={e => setEditDriverData({...editDriverData, license: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">License Expiry</label>
+                  <input type="date" value={editDriverData.license_expiry || ''} onChange={e => setEditDriverData({...editDriverData, license_expiry: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Experience (Years)</label>
+                  <input type="number" value={editDriverData.experience || 0} onChange={e => setEditDriverData({...editDriverData, experience: parseInt(e.target.value)})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-semibold text-slate-500">Status</label>
+                  <select value={editDriverData.availability || 'Available'} onChange={e => setEditDriverData({...editDriverData, availability: e.target.value as 'Available' | 'On Duty' | 'Off Duty'})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none">
+                    <option value="Available">Available</option>
+                    <option value="On Duty">On Duty</option>
+                    <option value="Off Duty">Off Duty</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="font-semibold text-slate-500">Address</label>
+                <input type="text" value={editDriverData.address || ''} onChange={e => setEditDriverData({...editDriverData, address: e.target.value})} className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:outline-none" />
+              </div>
+              <div className="flex justify-end gap-2.5 mt-2">
+                <button type="button" onClick={() => setShowEditModal(false)} className="px-4 py-2 border rounded-lg font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-550">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-750 text-white rounded-lg font-semibold shadow-soft-sm">Save Changes</button>
               </div>
             </form>
           </div>

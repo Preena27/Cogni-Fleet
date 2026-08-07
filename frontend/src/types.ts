@@ -4,6 +4,11 @@ export interface User {
   email: string | null;
   full_name: string | null;
   role: 'manager' | 'driver';
+  company_name?: string | null;
+  phone?: string | null;
+  timezone?: string | null;
+  language?: string | null;
+  profile_picture?: string | null;
 }
 
 export interface Vehicle {
@@ -14,13 +19,23 @@ export interface Vehicle {
   capacity: number;
   health: number;
   fuel: number;
+  current_fuel?: number;
+  fuel_capacity?: number;
   mileage: number;
+  odometer?: number;
+  mileage_kml?: number;
+  last_service_date?: string | null;
+  last_service_odometer?: number;
+  service_due_date?: string | null;
+  service_interval?: number;
+  next_service_due?: number;
   insurance: string | null;
   pollution: string | null;
   fitness: string | null;
   gps: string;
   latitude: number;
   longitude: number;
+  current_location?: string | null;
   speed: number;
   availability: 'Available' | 'On Duty' | 'Maintenance';
   current_trip_id: number | null;
@@ -44,6 +59,7 @@ export interface Driver {
   health: string;
   performance: number;
   vehicle_id: number | null;
+  manager_id?: number | null;
 }
 
 export interface Stop {
@@ -70,7 +86,7 @@ export interface Trip {
   vehicle_type: string | null;
   required_capacity: number;
   priority: 'Low' | 'Medium' | 'High' | 'Critical';
-  status: 'Unassigned' | 'Assigned' | 'Loading' | 'In Transit' | 'Delivered' | 'Problem' | 'Completed';
+  status: 'Draft' | 'Accepted' | 'Unassigned' | 'Assigned' | 'Loading' | 'In Transit' | 'Delivered' | 'Problem' | 'Completed';
   pickup_date: string | null;
   delivery_date: string | null;
   instructions: string | null;
@@ -81,6 +97,8 @@ export interface Trip {
   vehicle_id: number | null;
   eta: string | null;
   fuel_cost: number;
+  fuel_used?: number;
+  fuel_price?: number;
   revenue: number;
   distance: number;
   remaining_distance: number;
@@ -117,6 +135,10 @@ export interface ProofOfDelivery {
   qr_code: string | null;
   status: 'Pending' | 'Approved' | 'Rejected';
   submitted_at: string;
+  driver_id?: number;
+  vehicle_id?: number;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface Invoice {
@@ -135,6 +157,7 @@ export interface Invoice {
 export interface Alert {
   id: number;
   severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Resolved';
+  priority?: 'Information' | 'Warning' | 'High' | 'Critical';
   title: string;
   description: string | null;
   vehicle_number: string | null;
@@ -142,6 +165,7 @@ export interface Alert {
   location: string | null;
   timestamp: string;
   resolved: boolean;
+  acknowledged?: boolean;
   trip_id: number | null;
 }
 

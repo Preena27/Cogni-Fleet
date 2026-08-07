@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../App';
+import { useSettings } from '../contexts/SettingsContext';
 import { 
   TrendingUp, 
   Download, 
@@ -13,6 +14,11 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 
 export default function ReportsModule() {
   const { trips, vehicles, drivers, addToast } = useAppContext();
+  const { settings } = useSettings();
+  const isMiles = settings.distance_unit === 'Miles';
+  const volUnit = isMiles ? 'Gallons' : 'Liters';
+  const distUnit = isMiles ? '100 mi' : '100 km';
+  const consumptionMultiplier = isMiles ? 0.425144 : 1;
   const [reportRange, setReportRange] = useState<string>('Monthly');
 
   // 1. Calculate Pie Chart Data for Fleet Utilization
@@ -88,7 +94,7 @@ ${drivers.map(d => `- ${d.name}: Rating: ${d.rating.toFixed(1)}/5.0, Violations:
     // Reefer/Semi consume more, box trucks less
     const baseConsumption = v.type === 'Semi-Truck' ? 32 : v.type === 'Reefer' ? 35 : v.type === 'Flatbed' ? 28 : 18;
     // Lower health vehicle consumes slightly more
-    const actualConsumption = baseConsumption + (100 - v.health) * 0.15;
+    const actualConsumption = (baseConsumption + (100 - v.health) * 0.15) * consumptionMultiplier;
     return {
       name: v.vehicle_number,
       consumption: parseFloat(actualConsumption.toFixed(1))
@@ -176,7 +182,7 @@ ${drivers.map(d => `- ${d.name}: Rating: ${d.rating.toFixed(1)}/5.0, Violations:
         <div className="p-5 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl shadow-soft-md">
           <h3 className="font-bold text-sm text-slate-800 dark:text-slate-150 mb-4 flex items-center gap-1.5">
             <BarChart2 className="w-4 h-4 text-orange-500" />
-            <span>Fuel Consumption Index (Liters/100 km)</span>
+            <span>Fuel Consumption Index ({volUnit}/{distUnit})</span>
           </h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -185,7 +191,7 @@ ${drivers.map(d => `- ${d.name}: Rating: ${d.rating.toFixed(1)}/5.0, Violations:
                 <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
                 <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
                 <Tooltip />
-                <Bar name="Liters per 100km" dataKey="consumption" fill="#f97316" radius={[4, 4, 0, 0]} />
+                <Bar name={`${volUnit} per ${distUnit}`} dataKey="consumption" fill="#f97316" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

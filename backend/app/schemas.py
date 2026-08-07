@@ -13,6 +13,22 @@ class TokenData(BaseModel):
     username: Optional[str] = None
     role: Optional[str] = None
 
+# Message Schemas
+class MessageBase(BaseModel):
+    receiver_id: int
+    content: str
+
+class MessageCreate(MessageBase):
+    pass
+
+class MessageResponse(MessageBase):
+    id: int
+    sender_id: int
+    timestamp: datetime
+    is_read: bool
+    class Config:
+        from_attributes = True
+
 # User Schemas
 class UserBase(BaseModel):
     username: str
@@ -21,12 +37,66 @@ class UserBase(BaseModel):
     role: str
     company_name: Optional[str] = None
     phone: Optional[str] = None
+    timezone: Optional[str] = "UTC"
+    language: Optional[str] = "English"
+    profile_picture: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
 
 class UserResponse(UserBase):
     id: int
+    class Config:
+        from_attributes = True
+
+class UserProfileUpdateSchema(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    username: Optional[str] = None
+    company_name: Optional[str] = None
+    timezone: Optional[str] = None
+    language: Optional[str] = None
+    profile_picture: Optional[str] = None
+
+class PasswordUpdateSchema(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+class UsernameUpdateSchema(BaseModel):
+    new_username: str
+
+class UserSettingsBase(BaseModel):
+    distance_unit: Optional[str] = "Kilometers"
+    weight_unit: Optional[str] = "Kilograms"
+    temperature_unit: Optional[str] = "Celsius"
+    currency: Optional[str] = "INR ₹"
+    timezone: Optional[str] = "Asia/Kolkata"
+    date_format: Optional[str] = "DD/MM/YYYY"
+    time_format: Optional[str] = "24-hour"
+    language: Optional[str] = "English"
+    region: Optional[str] = "India"
+    map_view: Optional[str] = "Street"
+    route_style: Optional[str] = "Solid"
+    route_color: Optional[str] = "#3b82f6"
+    traffic_enabled: Optional[bool] = True
+    poi_enabled: Optional[bool] = False
+    building_3d_enabled: Optional[bool] = False
+    vehicle_markers_enabled: Optional[bool] = True
+    route_enabled: Optional[bool] = True
+    destination_enabled: Optional[bool] = True
+    route_optimization_mode: Optional[str] = "Balanced"
+    traffic_consideration: Optional[bool] = True
+    auto_route_recalculation: Optional[bool] = True
+    route_delay_threshold: Optional[int] = 5
+
+class UserSettingsUpdate(UserSettingsBase):
+    pass
+
+class UserSettingsResponse(UserSettingsBase):
+    id: int
+    user_id: int
     class Config:
         from_attributes = True
 
@@ -38,13 +108,23 @@ class VehicleBase(BaseModel):
     capacity: float
     health: Optional[int] = 100
     fuel: Optional[int] = 100
+    current_fuel: Optional[float] = 100.0
+    fuel_capacity: Optional[float] = 100.0
     mileage: Optional[float] = 0.0
+    odometer: Optional[float] = 0.0
+    mileage_kml: Optional[float] = 10.0
+    last_service_date: Optional[str] = None
+    last_service_odometer: Optional[float] = 0.0
+    service_due_date: Optional[str] = None
+    service_interval: Optional[float] = 10000.0
+    next_service_due: Optional[float] = 10000.0
     insurance: Optional[str] = None
     pollution: Optional[str] = None
     fitness: Optional[str] = None
     gps: Optional[str] = "Offline"
-    latitude: Optional[float] = 37.7749
-    longitude: Optional[float] = -122.4194
+    latitude: Optional[float] = 13.0827
+    longitude: Optional[float] = 80.2707
+    current_location: Optional[str] = None
     speed: Optional[float] = 0.0
     availability: Optional[str] = "Available"
     current_trip_id: Optional[int] = None
@@ -52,10 +132,41 @@ class VehicleBase(BaseModel):
 class VehicleCreate(VehicleBase):
     pass
 
+class VehicleUpdate(BaseModel):
+    vehicle_number: Optional[str] = None
+    registration: Optional[str] = None
+    type: Optional[str] = None
+    capacity: Optional[float] = None
+    health: Optional[int] = None
+    fuel: Optional[int] = None
+    current_fuel: Optional[float] = None
+    fuel_capacity: Optional[float] = None
+    mileage: Optional[float] = None
+    odometer: Optional[float] = None
+    mileage_kml: Optional[float] = None
+    last_service_date: Optional[str] = None
+    last_service_odometer: Optional[float] = None
+    service_due_date: Optional[str] = None
+    service_interval: Optional[float] = None
+    next_service_due: Optional[float] = None
+    insurance: Optional[str] = None
+    pollution: Optional[str] = None
+    fitness: Optional[str] = None
+    gps: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    current_location: Optional[str] = None
+    speed: Optional[float] = None
+    availability: Optional[str] = None
+    current_trip_id: Optional[int] = None
+
 class VehicleResponse(VehicleBase):
     id: int
     class Config:
         from_attributes = True
+
+class RefuelRequest(BaseModel):
+    fuel_added: float
 
 # Driver Schemas
 class DriverBase(BaseModel):
@@ -66,6 +177,8 @@ class DriverBase(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    current_location: Optional[str] = None
     experience: Optional[int] = 0
     availability: Optional[str] = "Available"
     working_hours: Optional[float] = 0.0
@@ -73,6 +186,26 @@ class DriverBase(BaseModel):
     violations: Optional[int] = 0
     health: Optional[str] = "Good"
     performance: Optional[float] = 100.0
+    vehicle_id: Optional[int] = None
+
+class DriverUpdate(BaseModel):
+    name: Optional[str] = None
+    username: Optional[str] = None
+    photo: Optional[str] = None
+    license: Optional[str] = None
+    license_expiry: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    current_location: Optional[str] = None
+    experience: Optional[int] = None
+    availability: Optional[str] = None
+    working_hours: Optional[float] = None
+    rating: Optional[float] = None
+    violations: Optional[int] = None
+    health: Optional[str] = None
+    performance: Optional[float] = None
     vehicle_id: Optional[int] = None
 
 class DriverCreate(DriverBase):
@@ -107,6 +240,8 @@ class TripBase(BaseModel):
     vehicle_id: Optional[int] = None
     eta: Optional[str] = None
     fuel_cost: Optional[float] = 0.0
+    fuel_used: Optional[float] = 0.0
+    fuel_price: Optional[float] = 95.0
     revenue: Optional[float] = 0.0
     distance: Optional[float] = 0.0
     remaining_distance: Optional[float] = 0.0
@@ -126,6 +261,25 @@ class TripBase(BaseModel):
 
 class TripCreate(TripBase):
     pass
+
+class TripBulkImportItem(BaseModel):
+    id: Optional[int] = None
+    customer: Optional[str] = "CSV Import"
+    pickup: str
+    destination: str
+    cargo_type: Optional[str] = None
+    weight: Optional[float] = 0.0
+    volume: Optional[float] = 0.0
+    vehicle_type: Optional[str] = "Semi-Truck"
+    required_capacity: Optional[float] = 0.0
+    priority: Optional[str] = "Medium"
+    status: Optional[str] = "Unassigned"
+    pickup_date: Optional[str] = None
+    delivery_date: Optional[str] = None
+    instructions: Optional[str] = None
+    fragile: Optional[bool] = False
+    temperature_control: Optional[bool] = False
+    insurance: Optional[bool] = False
 
 class TripResponse(TripBase):
     id: int
@@ -160,6 +314,10 @@ class ProofOfDeliveryBase(BaseModel):
     barcode: Optional[str] = None
     qr_code: Optional[str] = None
     status: Optional[str] = "Pending"
+    driver_id: Optional[int] = None
+    vehicle_id: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class ProofOfDeliveryCreate(ProofOfDeliveryBase):
     pass
@@ -193,12 +351,14 @@ class InvoiceResponse(InvoiceBase):
 # Alert Schemas
 class AlertBase(BaseModel):
     severity: str
+    priority: Optional[str] = "Information"
     title: str
     description: Optional[str] = None
     vehicle_number: Optional[str] = None
     driver_name: Optional[str] = None
     location: Optional[str] = None
     resolved: Optional[bool] = False
+    acknowledged: Optional[bool] = False
     trip_id: Optional[int] = None
     driver_id: Optional[int] = None
 
@@ -239,3 +399,8 @@ class DriverCreateRequest(BaseModel):
     password: str
     license: str
     phone: str
+    email: Optional[str] = None
+    address: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    current_location: Optional[str] = None
+    experience: Optional[int] = 0

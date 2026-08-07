@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../App';
-import { Truck, Shield, User, Lock, ArrowRight, Mail, Phone, Building } from 'lucide-react';
+import { Truck, Shield, User, Lock, ArrowRight, ArrowLeft, Mail, Phone, Building } from 'lucide-react';
 
-export default function LoginPage() {
+interface LoginPageProps {
+  onBackToHome?: () => void;
+}
+
+export default function LoginPage({ onBackToHome }: LoginPageProps) {
   const { setIsLoggedIn, setCurrentUser, setRole, addToast } = useAppContext();
   const [selectedRole, setSelectedRole] = useState<'manager' | 'driver'>('manager');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -138,6 +142,16 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4 font-sans selection:bg-primary-100">
       <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-soft-lg overflow-hidden flex flex-col gap-5 p-6 md:p-8 animate-scale-in">
+        
+        {onBackToHome && (
+          <button 
+            type="button"
+            onClick={onBackToHome}
+            className="self-start text-xs font-bold text-slate-500 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors flex items-center gap-1.5 -mt-1 -ml-1 py-1 px-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to Cognifleet Home
+          </button>
+        )}
         
         {/* Brand Header */}
         <div className="text-center flex flex-col items-center gap-2">
@@ -344,36 +358,7 @@ export default function LoginPage() {
           </form>
         )}
 
-        {/* Quick Credentials Sandbox Helpers (hidden in Sign Up mode) */}
-        {!isSignUp && (
-          <div className="border-t border-slate-100 dark:border-slate-800 pt-4 flex flex-col gap-2.5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Sandbox Quick Credentials</span>
-            <div className="flex flex-col gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickSelect('manager', 'admin', 'admin')}
-                className="w-full p-2.5 rounded-lg border text-left flex justify-between hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all cursor-pointer border-slate-100 dark:border-slate-800"
-              >
-                <div>
-                  <p className="font-bold text-[10px] text-slate-700 dark:text-slate-350">Manager Default</p>
-                  <p className="text-[9px] text-slate-400 mt-0.5">Admin Operations Control Room</p>
-                </div>
-                <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold self-center">admin / admin</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickSelect('driver', 'driver1', 'driver')}
-                className="w-full p-2.5 rounded-lg border text-left flex justify-between hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-all cursor-pointer border-slate-100 dark:border-slate-800"
-              >
-                <div>
-                  <p className="font-bold text-[10px] text-slate-700 dark:text-slate-350">Driver 1: John Davis</p>
-                  <p className="text-[9px] text-slate-400 mt-0.5">Assigned Semi-Truck TRK-101</p>
-                </div>
-                <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold self-center">driver1 / driver</span>
-              </button>
-            </div>
-          </div>
-        )}
+
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ import datetime
 from .database import engine, Base, get_db
 from . import models, schemas
 from .websocket import manager
-from .ai_service import ask_ai_assistant, evaluate_auto_assignment
+from .ai_service import ask_ai_assistant, evaluate_auto_assignment, get_full_fleet_intelligence
 from .automation import (
     run_trip_assigned_pipeline,
     run_driver_response_pipeline,
@@ -167,6 +167,11 @@ async def create_driver_auth(req: schemas.DriverCreateRequest, db: Session = Dep
         name=req.name,
         license=req.license,
         phone=req.phone,
+        email=req.email,
+        address=req.address,
+        emergency_contact=req.emergency_contact,
+        current_location=req.current_location,
+        experience=req.experience,
         availability="Available"
     )
     db.add(driver)
@@ -204,6 +209,115 @@ def login(form_data: schemas.UserCreate, db: Session = Depends(get_db)):
         "id": db_user.id
     }
 
+@app.get("/api/auth/me", response_model=schemas.UserResponse)
+def get_current_user_profile(current_user: models.User = Depends(get_current_user)):
+    return current_user
+
+@app.put("/api/auth/profile", response_model=schemas.UserResponse)
+async def update_profile(profile_data: schemas.UserProfileUpdateSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if profile_data.username and profile_data.username != current_user.username:
+        existing = db.query(models.User).filter(models.User.username == profile_data.username).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Username already taken")
+        current_user.username = profile_data.username
+
+    if profile_data.full_name is not None:
+        current_user.full_name = profile_data.full_name
+    if profile_data.email is not None:
+        current_user.email = profile_data.email
+    if profile_data.phone is not None:
+        current_user.phone = profile_data.phone
+    if profile_data.company_name is not None:
+        current_user.company_name = profile_data.company_name
+    if profile_data.timezone is not None:
+        current_user.timezone = profile_data.timezone
+    if profile_data.language is not None:
+        current_user.language = profile_data.language
+    if profile_data.profile_picture is not None:
+        current_user.profile_picture = profile_data.profile_picture
+
+    db.commit()
+    db.refresh(current_user)
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "profile"})
+    return current_user
+
+@app.put("/api/auth/username")
+async def update_username(data: schemas.UsernameUpdateSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if data.new_username == current_user.username:
+        return {"message": "Username is the same"}
+        
+    existing = db.query(models.User).filter(models.User.username == data.new_username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken")
+        
+    current_user.username = data.new_username
+    db.commit()
+    db.refresh(current_user)
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "profile"})
+    return {"message": "Username updated successfully", "new_username": current_user.username}
+
+@app.get("/api/settings", response_model=schemas.UserSettingsResponse)
+def get_user_settings(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    settings = db.query(models.UserSettings).filter(models.UserSettings.user_id == current_user.id).first()
+    if not settings:
+        settings = models.UserSettings(user_id=current_user.id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+@app.put("/api/settings", response_model=schemas.UserSettingsResponse)
+async def update_user_settings(data: schemas.UserSettingsUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    settings = db.query(models.UserSettings).filter(models.UserSettings.user_id == current_user.id).first()
+    if not settings:
+        settings = models.UserSettings(user_id=current_user.id)
+        db.add(settings)
+        
+    for key, value in data.dict(exclude_unset=True).items():
+        setattr(settings, key, value)
+        
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+@app.post("/api/auth/change-password")
+async def change_password(data: schemas.PasswordUpdateSchema, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password incorrect")
+    if data.new_password != data.confirm_password:
+        raise HTTPException(status_code=400, detail="New passwords do not match")
+    if len(data.new_password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    current_user.hashed_password = get_password_hash(data.new_password)
+    
+    # Create notification alert
+    alert = models.Alert(
+        severity="Low",
+        priority="Information",
+        title="Security Notification",
+        description=f"Password for account '{current_user.username}' updated successfully.",
+        timestamp=datetime.datetime.utcnow(),
+        manager_id=current_user.id
+    )
+    db.add(alert)
+    db.commit()
+
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+    return {"message": "Password updated successfully"}
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert.acknowledged = True
+    alert.resolved = True
+    db.commit()
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+    return {"message": "Alert acknowledged successfully"}
+
 # --- Vehicles Router ---
 @app.get("/api/vehicles", response_model=List[schemas.VehicleResponse])
 def get_vehicles(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -226,19 +340,74 @@ async def create_vehicle(vehicle: schemas.VehicleCreate, db: Session = Depends(g
     return db_vehicle
 
 @app.put("/api/vehicles/{vehicle_id}", response_model=schemas.VehicleResponse)
-async def update_vehicle(vehicle_id: int, vehicle_data: schemas.VehicleCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+async def update_vehicle(vehicle_id: int, vehicle_data: schemas.VehicleUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="Only Managers can manage vehicles.")
     db_vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id, models.Vehicle.manager_id == current_user.id).first()
     if not db_vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     
-    for key, value in vehicle_data.dict().items():
+    update_data = vehicle_data.dict(exclude_unset=True)
+    for key, value in update_data.items():
         setattr(db_vehicle, key, value)
+    
+    if "odometer" in update_data or "last_service_odometer" in update_data or "service_interval" in update_data:
+        db_vehicle.next_service_due = (db_vehicle.last_service_odometer or 0) + (db_vehicle.service_interval or 10000.0)
     
     db.commit()
     db.refresh(db_vehicle)
     await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+    return db_vehicle
+
+@app.post("/api/vehicles/{vehicle_id}/refuel", response_model=schemas.VehicleResponse)
+async def refuel_vehicle(vehicle_id: int, req: schemas.RefuelRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="Only Managers can manage vehicles.")
+    db_vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id, models.Vehicle.manager_id == current_user.id).first()
+    if not db_vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    capacity = db_vehicle.fuel_capacity or 100.0
+    current = db_vehicle.current_fuel or 0.0
+    
+    if current + req.fuel_added > capacity:
+        raise HTTPException(status_code=400, detail="Cannot exceed tank capacity")
+        
+    db_vehicle.current_fuel = current + req.fuel_added
+    db_vehicle.fuel = int((db_vehicle.current_fuel / capacity) * 100)
+    
+    db.commit()
+    db.refresh(db_vehicle)
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+    return db_vehicle
+
+@app.post("/api/vehicles/{vehicle_id}/maintenance/complete", response_model=schemas.VehicleResponse)
+async def complete_maintenance(vehicle_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="Only Managers can manage vehicles.")
+    db_vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id, models.Vehicle.manager_id == current_user.id).first()
+    if not db_vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    db_vehicle.last_service_odometer = db_vehicle.odometer
+    db_vehicle.next_service_due = db_vehicle.odometer + (db_vehicle.service_interval or 10000.0)
+    db_vehicle.availability = "Available"
+    db_vehicle.health = 100
+    db_vehicle.last_service_date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    
+    # Resolve any unresolved maintenance alerts for this vehicle
+    maintenance_alerts = db.query(models.Alert).filter(
+        models.Alert.vehicle_number == db_vehicle.vehicle_number,
+        models.Alert.resolved == False,
+        models.Alert.title.like("%Maintenance%")
+    ).all()
+    for alert in maintenance_alerts:
+        alert.resolved = True
+
+    db.commit()
+    db.refresh(db_vehicle)
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
     return db_vehicle
 
 @app.delete("/api/vehicles/{vehicle_id}")
@@ -258,7 +427,7 @@ async def delete_vehicle(vehicle_id: int, db: Session = Depends(get_db), current
 def get_drivers(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role == "driver":
         return db.query(models.Driver).filter(models.Driver.user_id == current_user.id).all()
-    return db.query(models.Driver).filter(models.Driver.manager_id == current_user.id).all()
+    return db.query(models.Driver).all()
 
 @app.post("/api/drivers", response_model=schemas.DriverResponse)
 async def create_driver(driver: schemas.DriverCreateRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -304,24 +473,63 @@ async def create_driver(driver: schemas.DriverCreateRequest, db: Session = Depen
     return db_driver
 
 @app.put("/api/drivers/{driver_id}", response_model=schemas.DriverResponse)
-async def update_driver(driver_id: int, driver_data: schemas.DriverBase, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+async def update_driver(driver_id: int, driver_data: schemas.DriverUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role == "driver":
         db_driver = db.query(models.Driver).filter(models.Driver.id == driver_id, models.Driver.user_id == current_user.id).first()
         if not db_driver:
             raise HTTPException(status_code=403, detail="Not authorized to update this driver.")
     elif current_user.role == "manager":
-        db_driver = db.query(models.Driver).filter(models.Driver.id == driver_id, models.Driver.manager_id == current_user.id).first()
+        db_driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
     else:
         raise HTTPException(status_code=403, detail="Only Managers or the Driver themselves can update driver status.")
         
     if not db_driver:
         raise HTTPException(status_code=404, detail="Driver not found")
     
-    for key, value in driver_data.dict().items():
-        setattr(db_driver, key, value)
-        
+    for key, value in driver_data.dict(exclude_unset=True).items():
+        if key == "username" and value is not None and db_driver.user:
+            existing = db.query(models.User).filter(models.User.username == value, models.User.id != db_driver.user_id).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Username already exists")
+            db_driver.user.username = value
+        elif hasattr(db_driver, key):
+            setattr(db_driver, key, value)
+            
     db.commit()
     db.refresh(db_driver)
+
+    # Trigger Automated Notification Alert & AI Proactive Warning if License Expiry <= 30 Days
+    if db_driver.license_expiry:
+        try:
+            date_str = str(db_driver.license_expiry).split("T")[0]
+            if "-" in date_str:
+                parts = date_str.split("-")
+                exp_dt = datetime.date(int(parts[0]), int(parts[1]), int(parts[2])) if len(parts[0]) == 4 else datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
+                days_left = (exp_dt - datetime.date.today()).days
+                if days_left <= 30:
+                    alert_title = f"Driver License Expiry Warning: {db_driver.name}"
+                    existing_alert = db.query(models.Alert).filter(models.Alert.title == alert_title, models.Alert.resolved == False).first()
+                    if existing_alert:
+                        existing_alert.description = f"Driver {db_driver.name}'s commercial license expires in {days_left} day(s) ({db_driver.license_expiry}). Please initiate renewal."
+                        existing_alert.severity = "Critical" if days_left <= 7 else "Warning"
+                        existing_alert.priority = "High" if days_left <= 15 else "Medium"
+                        existing_alert.timestamp = datetime.datetime.utcnow()
+                    else:
+                        new_alert = models.Alert(
+                            severity="Critical" if days_left <= 7 else "Warning",
+                            priority="High" if days_left <= 15 else "Medium",
+                            title=alert_title,
+                            description=f"Driver {db_driver.name}'s commercial license expires in {days_left} day(s) ({db_driver.license_expiry}). Please initiate renewal.",
+                            driver_name=db_driver.name,
+                            timestamp=datetime.datetime.utcnow()
+                        )
+                        db.add(new_alert)
+                    db.commit()
+                    await log_automation_step(db, "Compliance Warning", "License Expiry Alert", f"License for {db_driver.name} expires in {days_left} days ({db_driver.license_expiry}). Alert broadcasted.")
+                    await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+        except Exception as e:
+            print(f"License expiry parse error: {e}")
+
     await manager.broadcast({"type": "REFRESH_DATA", "module": "drivers"})
     return db_driver
 
@@ -405,20 +613,98 @@ async def create_trip(trip: schemas.TripCreate, db: Session = Depends(get_db), c
     
     return db_trip
 
+@app.post("/api/trips/bulk")
+async def bulk_create_trips(trips: List[schemas.TripBulkImportItem], db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="Only Managers can import loads.")
+    
+    success_count = 0
+    skipped_count = 0
+    failed_count = 0
+    
+    route_coords = [
+        [37.7749, -122.4194],  # SF
+        [34.0522, -118.2437]   # LA
+    ]
+    
+    for item in trips:
+        try:
+            # Check duplicate load ID in DB
+            if item.id is not None:
+                existing_by_id = db.query(models.Trip).filter(models.Trip.id == item.id).first()
+                if existing_by_id:
+                    skipped_count += 1
+                    continue
+            
+            # Check duplicate by pickup, destination, customer
+            existing_by_fields = db.query(models.Trip).filter(
+                models.Trip.customer == item.customer,
+                models.Trip.pickup == item.pickup,
+                models.Trip.destination == item.destination,
+                models.Trip.manager_id == current_user.id
+            ).first()
+            
+            if existing_by_fields:
+                skipped_count += 1
+                continue
+                
+            trip_dict = item.dict()
+            trip_dict["manager_id"] = current_user.id
+            
+            if not trip_dict.get("route_coordinates"):
+                trip_dict["route_coordinates"] = json.dumps(route_coords)
+            if not trip_dict.get("stops"):
+                trip_dict["stops"] = json.dumps([
+                    {"location": item.pickup, "type": "Pickup", "status": "Pending"},
+                    {"location": item.destination, "type": "Delivery", "status": "Pending"}
+                ])
+            if not trip_dict.get("history"):
+                trip_dict["history"] = json.dumps([
+                    {"status": "Unassigned", "timestamp": datetime.datetime.utcnow().isoformat(), "notes": "Load imported via CSV."}
+                ])
+            if not trip_dict.get("revenue"):
+                weight_val = item.weight if item.weight is not None else 0.0
+                trip_dict["revenue"] = round(weight_val * 450 + 800, 2)
+            if not trip_dict.get("fuel_cost"):
+                trip_dict["fuel_cost"] = round(trip_dict["revenue"] * 0.22, 2)
+            if not trip_dict.get("distance"):
+                trip_dict["distance"] = 620.0
+            if not trip_dict.get("remaining_distance"):
+                trip_dict["remaining_distance"] = 620.0
+                
+            db_trip = models.Trip(**trip_dict)
+            db.add(db_trip)
+            success_count += 1
+        except Exception as e:
+            print(f"Error importing row: {e}")
+            failed_count += 1
+            
+    if success_count > 0:
+        db.commit()
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "drivers"})
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+        
+    return {
+        "success": success_count,
+        "skipped": skipped_count,
+        "failed": failed_count
+    }
+
 @app.post("/api/trips/{trip_id}/manual-assign", response_model=schemas.TripResponse)
 async def manual_assign_trip(trip_id: int, payload: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="Only Managers can manually assign trips.")
         
-    db_trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.manager_id == current_user.id).first()
+    db_trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
     if not db_trip:
         raise HTTPException(status_code=404, detail="Trip not found")
         
     driver_id = payload.get("driver_id")
     vehicle_id = payload.get("vehicle_id")
     
-    driver = db.query(models.Driver).filter(models.Driver.id == driver_id, models.Driver.manager_id == current_user.id).first()
-    vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id, models.Vehicle.manager_id == current_user.id).first()
+    driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+    vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id).first()
     
     if not driver or not vehicle:
         raise HTTPException(status_code=400, detail="Invalid driver or vehicle selection")
@@ -620,10 +906,29 @@ async def delete_trip(trip_id: int, db: Session = Depends(get_db), current_user:
     db_trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.manager_id == current_user.id).first()
     if not db_trip:
         raise HTTPException(status_code=404, detail="Trip not found")
+    if db_trip.status not in ("Unassigned", "Draft"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete load #{trip_id} because it is currently '{db_trip.status}' (assigned or in progress)."
+        )
     db.delete(db_trip)
     db.commit()
     await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
     return {"message": "Trip deleted successfully"}
+
+@app.post("/api/trips/{trip_id}/accept", response_model=schemas.TripResponse)
+async def accept_trip(trip_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="Only Managers can accept loads.")
+    db_trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.manager_id == current_user.id).first()
+    if not db_trip:
+        raise HTTPException(status_code=404, detail="Load not found")
+        
+    db_trip.status = "Accepted"
+    db.commit()
+    db.refresh(db_trip)
+    await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
+    return db_trip
 
 # --- Driver Actions (Mobile Simulation Interface) ---
 @app.post("/api/trips/{trip_id}/accept")
@@ -656,7 +961,7 @@ async def start_trip(trip_id: int, db: Session = Depends(get_db)):
     if driver:
         driver.availability = "On Duty"
     if vehicle:
-        vehicle.availability = "On Duty"
+        vehicle.availability = "In Transit"
         vehicle.gps = "Online"
         vehicle.speed = 55.0
     history = json.loads(trip.history or "[]")
@@ -768,34 +1073,51 @@ async def report_issue(trip_id: int, payload: dict, db: Session = Depends(get_db
     description = payload.get("description", "")
     priority = payload.get("priority", "High")
     gps = payload.get("gps", "Unknown")
+    
+    # Enforce Critical priority for major safety/vehicle failures
+    if issue_type in ["Accident", "Vehicle Breakdown", "Medical Emergency", "Engine Problem"]:
+        priority = "Critical"
+    
     driver = db.query(models.Driver).filter(models.Driver.id == trip.driver_id).first()
     driver_name = driver.name if driver else "Driver"
     vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == trip.vehicle_id).first()
     vehicle_no = vehicle.vehicle_number if vehicle else "TRK"
+    
     history = json.loads(trip.history or "[]")
     history.append({
         "status": "Problem",
         "timestamp": datetime.datetime.utcnow().isoformat(),
-        "notes": f"Issue reported: {issue_type}. Details: {description}."
+        "notes": f"Incident reported: {issue_type}. Priority: {priority.upper()}. Details: {description}."
     })
     trip.history = json.dumps(history)
     trip.status = "Problem"
-    if vehicle and issue_type in ["Vehicle Breakdown", "Engine Problem", "Flat Tyre"]:
+    if vehicle and issue_type in ["Vehicle Breakdown", "Engine Problem", "Flat Tyre", "Accident"]:
         vehicle.availability = "Maintenance"
         vehicle.speed = 0.0
+        
+    time_str = datetime.datetime.utcnow().strftime("%I:%M %p")
+    location_str = gps if (gps and gps != "Unknown") else (vehicle.current_location if vehicle else f"{trip.pickup} -> {trip.destination}")
+    
+    title_text = f"🔴 CRITICAL - {issue_type.upper()}" if priority.upper() == "CRITICAL" else f"Incident Reported: {issue_type}"
+    desc_text = f"Driver: {driver_name} | Vehicle: {vehicle_no} | Trip #{trip_id}: {trip.pickup} -> {trip.destination} | Reason: {description or issue_type} | Location: {location_str} | Time: {time_str} | Priority: {priority.upper()}"
+    
     alert = models.Alert(
         severity=priority,
-        title=f"Incident Reported: {issue_type}",
-        description=f"Driver {driver_name} (Vehicle {vehicle_no}) reported issue at GPS {gps}. Severity: {priority}. Description: {description}",
+        priority=priority,
+        title=title_text,
+        description=desc_text,
         driver_name=driver_name,
         vehicle_number=vehicle_no,
-        location=gps,
+        location=location_str,
         timestamp=datetime.datetime.utcnow(),
-        trip_id=trip_id
+        trip_id=trip_id,
+        driver_id=trip.driver_id,
+        manager_id=trip.manager_id
     )
     db.add(alert)
     db.commit()
-    await log_automation_step(db, "Issue Filed", "Incident Log", f"Trip #{trip_id} flagged with problem '{issue_type}' (Severity: {priority}).")
+    
+    await log_automation_step(db, "Issue Filed", "Incident Log", f"Trip #{trip_id} flagged with problem '{issue_type}' (Priority: {priority.upper()}).", manager_id=trip.manager_id, driver_id=trip.driver_id, vehicle_number=vehicle_no)
     await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
     await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
     await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
@@ -885,7 +1207,178 @@ async def end_trip(trip_id: int, payload: dict, db: Session = Depends(get_db)):
     await manager.broadcast({"type": "REFRESH_DATA", "module": "invoices"})
     return {"status": "success"}
 
+@app.post("/api/trips/{trip_id}/progress")
+async def progress_trip(trip_id: int, payload: dict, db: Session = Depends(get_db)):
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+        
+    distance_delta = float(payload.get("distance_delta", 0.0))
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    speed = payload.get("speed", 55.0)
+    current_location = payload.get("current_location")
+    
+    vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == trip.vehicle_id).first() if trip.vehicle_id else None
+    driver = db.query(models.Driver).filter(models.Driver.id == trip.driver_id).first() if trip.driver_id else None
+    
+    is_idle = payload.get("is_idle", False)
+    idle_duration = float(payload.get("idle_duration", 0.0)) # in seconds
+    idle_reason = payload.get("idle_reason", "Stopped / Break")
+    trigger_5min_alert = payload.get("trigger_5min_alert", False)
+    
+    if is_idle and vehicle:
+        vehicle.speed = 0.0
+        vehicle.availability = "IDLE"
+        if driver:
+            driver.availability = "On Duty"
+        
+        trip.idle_time = round((trip.idle_time or 0.0) + (idle_duration / 60.0), 2)
+        
+        # 5-minute idle alert check
+        if trigger_5min_alert or idle_duration >= 300.0:
+            driver_name = driver.name if driver else "Driver"
+            vehicle_no = vehicle.vehicle_number if vehicle else "TRK"
+            duration_mins = round(idle_duration / 60.0, 1)
+            location_str = current_location or f"GPS ({lat or 13.08}, {lng or 80.27})"
+            
+            # Check if recent alert already exists
+            existing_alert = db.query(models.Alert).filter(
+                models.Alert.trip_id == trip_id,
+                models.Alert.title.like("%Excessive Vehicle Idle Alert%")
+            ).first()
+            
+            if not existing_alert:
+                alert = models.Alert(
+                    severity="Warning",
+                    priority="Warning",
+                    title="Excessive Vehicle Idle Alert (>5 mins)",
+                    description=f"Driver {driver_name} (Vehicle {vehicle_no}) idle for {duration_mins} mins during Trip #{trip_id}. Reason: {idle_reason}. Location: {location_str}.",
+                    driver_name=driver_name,
+                    vehicle_number=vehicle_no,
+                    location=location_str,
+                    timestamp=datetime.datetime.utcnow(),
+                    trip_id=trip_id,
+                    manager_id=trip.manager_id
+                )
+                db.add(alert)
+                db.commit()
+                await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+                
+        db.commit()
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+        
+    elif distance_delta > 0 and vehicle:
+        mileage_kml = vehicle.mileage_kml if (vehicle.mileage_kml and vehicle.mileage_kml > 0) else 10.0
+        fuel_consumed = distance_delta / mileage_kml
+        
+        current_f = vehicle.current_fuel if vehicle.current_fuel is not None else (vehicle.fuel_capacity or 100.0)
+        vehicle.current_fuel = max(0.0, current_f - fuel_consumed)
+        
+        capacity = vehicle.fuel_capacity or 100.0
+        if capacity > 0:
+            vehicle.fuel = int((vehicle.current_fuel / capacity) * 100)
+            
+        vehicle.odometer = (vehicle.odometer or 0.0) + distance_delta
+        vehicle.mileage = (vehicle.mileage or 0.0) + distance_delta
+        if lat is not None and lng is not None:
+            vehicle.latitude = lat
+            vehicle.longitude = lng
+        if current_location:
+            vehicle.current_location = current_location
+        vehicle.speed = speed
+        vehicle.gps = "Online"
+        vehicle.availability = "In Transit"
+        
+        trip.remaining_distance = max(0.0, (trip.remaining_distance if trip.remaining_distance is not None else trip.distance) - distance_delta)
+        trip.fuel_used = (trip.fuel_used or 0.0) + fuel_consumed
+        
+        if driver:
+            driver.availability = "On Duty"
+            driver.working_hours = round((driver.working_hours or 0.0) + (distance_delta / speed if speed > 0 else 0.05), 2)
+            if current_location:
+                driver.current_location = current_location
+            
+        db.commit()
+        
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "trips"})
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "drivers"})
+        
+    return {
+        "status": "success",
+        "remaining_distance": trip.remaining_distance,
+        "current_fuel": vehicle.current_fuel if vehicle else None,
+        "fuel_percentage": vehicle.fuel if vehicle else None
+    }
+
 # --- AI Endpoints ---
+@app.get("/api/ai/intelligence")
+def get_ai_intelligence(db: Session = Depends(get_db)):
+    return get_full_fleet_intelligence(db)
+
+@app.post("/api/ai/execute-recommendation")
+async def execute_ai_recommendation(payload: dict, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if current_user.role != "manager":
+        raise HTTPException(status_code=403, detail="Only Managers can execute AI recommendations.")
+
+    action_type = payload.get("action_type")
+    action_data = payload.get("action_payload", {})
+
+    if action_type == "assign_load":
+        trip_id = action_data.get("trip_id")
+        driver_id = action_data.get("driver_id")
+        vehicle_id = action_data.get("vehicle_id")
+        
+        trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+        driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+        vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id).first()
+        
+        if trip and driver and vehicle:
+            trip.driver_id = driver.id
+            trip.vehicle_id = vehicle.id
+            trip.status = "Assigned"
+            trip.assignment_reason = "Recommended by CogniFleet Proactive AI Engine"
+            trip.assignment_confidence = 96.0
+            trip.assignment_time = datetime.datetime.utcnow()
+            db.commit()
+            
+            await run_trip_assigned_pipeline(trip.id, db)
+            return {"message": f"Successfully assigned Load #{trip_id} to Driver {driver.name} & Vehicle {vehicle.vehicle_number}."}
+
+    elif action_type == "schedule_maintenance":
+        vehicle_id = action_data.get("vehicle_id")
+        vehicle = db.query(models.Vehicle).filter(models.Vehicle.id == vehicle_id).first()
+        if vehicle:
+            vehicle.availability = "Maintenance"
+            db.commit()
+            
+            alert = models.Alert(
+                severity="Critical",
+                priority="Critical",
+                title=f"Maintenance Scheduled: {vehicle.vehicle_number}",
+                description=f"Maintenance ticket created via AI Advisor 1-Click Action for {vehicle.vehicle_number}.",
+                vehicle_number=vehicle.vehicle_number,
+                timestamp=datetime.datetime.utcnow()
+            )
+            db.add(alert)
+            db.commit()
+            await log_automation_step(db, "AI Action", "Schedule Maintenance", f"Scheduled maintenance for vehicle {vehicle.vehicle_number} via AI Proactive Engine.")
+            await manager.broadcast({"type": "REFRESH_DATA", "module": "vehicles"})
+            await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+            return {"message": f"Service inspection scheduled for Vehicle {vehicle.vehicle_number}."}
+
+    elif action_type == "renew_license":
+        driver_id = action_data.get("driver_id")
+        driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+        if driver:
+            await log_automation_step(db, "AI Action", "License Renewal", f"Initiated commercial license renewal workflow for Driver {driver.name}.")
+            await manager.broadcast({"type": "REFRESH_DATA", "module": "drivers"})
+            return {"message": f"License renewal request generated for Driver {driver.name}."}
+
+    return {"message": "AI recommendation recorded successfully."}
+
 @app.post("/api/ai-assistant")
 def ai_assistant_chat(payload: schemas.AIQuery, db: Session = Depends(get_db)):
     response = ask_ai_assistant(payload.query, db, payload.conversation)
@@ -920,7 +1413,7 @@ async def delete_pod(pod_id: int, db: Session = Depends(get_db), current_user: m
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="Only Managers can delete POD records.")
 
-    pod = db.query(models.ProofOfDelivery).join(models.Trip).filter(models.ProofOfDelivery.id == pod_id, models.Trip.manager_id == current_user.id).first()
+    pod = db.query(models.ProofOfDelivery).filter(models.ProofOfDelivery.id == pod_id).first()
     if not pod:
         raise HTTPException(status_code=404, detail="POD record not found")
 
@@ -939,7 +1432,7 @@ async def update_pod(pod_id: int, status: str, db: Session = Depends(get_db), cu
     if current_user.role != "manager":
         raise HTTPException(status_code=403, detail="Only Managers can verify POD records.")
         
-    pod = db.query(models.ProofOfDelivery).join(models.Trip).filter(models.ProofOfDelivery.id == pod_id, models.Trip.manager_id == current_user.id).first()
+    pod = db.query(models.ProofOfDelivery).filter(models.ProofOfDelivery.id == pod_id).first()
     if not pod:
         raise HTTPException(status_code=404, detail="POD record not found")
         
@@ -1008,6 +1501,8 @@ async def driver_submit_pod(payload: dict, db: Session = Depends(get_db), curren
     trip_id = payload.get("trip_id")
     signature = payload.get("signature_path")
     photo = payload.get("photo_path")
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
     
     if not trip_id:
         raise HTTPException(status_code=400, detail="trip_id is required")
@@ -1016,10 +1511,15 @@ async def driver_submit_pod(payload: dict, db: Session = Depends(get_db), curren
     if not db_trip:
         raise HTTPException(status_code=404, detail="Trip not found")
         
+    driver_id = None
+    vehicle_id = None
+        
     if current_user.role == "driver":
         drv = db.query(models.Driver).filter(models.Driver.user_id == current_user.id).first()
         if not drv or db_trip.driver_id != drv.id:
             raise HTTPException(status_code=403, detail="You can only submit POD for your assigned trips.")
+        driver_id = drv.id
+        vehicle_id = drv.vehicle_id
             
     pod = db.query(models.ProofOfDelivery).filter(models.ProofOfDelivery.trip_id == trip_id).first()
     if not pod:
@@ -1030,6 +1530,10 @@ async def driver_submit_pod(payload: dict, db: Session = Depends(get_db), curren
     pod.photo_path = photo
     pod.status = "Pending"
     pod.submitted_at = datetime.datetime.utcnow()
+    pod.latitude = latitude
+    pod.longitude = longitude
+    pod.driver_id = driver_id
+    pod.vehicle_id = vehicle_id
     db.commit()
     db.refresh(pod)
     
@@ -1188,55 +1692,54 @@ def seed_database():
     
     # 2. Create Vehicles
     vehicles = [
-        models.Vehicle(vehicle_number="TRK-101", registration="CA-992-FX", type="Semi-Truck", capacity=15.0, health=95, fuel=85, mileage=12400.5, gps="Online", latitude=37.7749, longitude=-122.4194, speed=55.0, availability="Available"),
-        models.Vehicle(vehicle_number="TRK-102", registration="CA-881-ZZ", type="Reefer", capacity=12.0, health=62, fuel=92, mileage=24500.0, gps="Online", latitude=34.0522, longitude=-118.2437, speed=0.0, availability="Maintenance"), # Maintenance
-        models.Vehicle(vehicle_number="TRK-103", registration="TX-451-AP", type="Box Truck", capacity=8.0, health=88, fuel=45, mileage=8620.2, gps="Online", latitude=37.2294, longitude=-121.9792, speed=42.0, availability="Available"),
-        models.Vehicle(vehicle_number="TRK-104", registration="NY-332-LM", type="Flatbed", capacity=20.0, health=78, fuel=15, mileage=32100.8, gps="Online", latitude=37.8044, longitude=-122.2712, speed=0.0, availability="Available"), # Low fuel
-        models.Vehicle(vehicle_number="TRK-105", registration="FL-109-YY", type="Semi-Truck", capacity=15.0, health=100, fuel=100, mileage=1200.0, gps="Offline", latitude=37.3382, longitude=-121.8863, speed=0.0, availability="Available") # Offline
+        models.Vehicle(vehicle_number="TRK-101", registration="TN-01-FX", type="Semi-Truck", capacity=15.0, health=95, fuel=85, mileage=12400.5, mileage_kml=10.0, last_service_date="2026-06-15", service_due_date="2026-09-30", gps="Online", latitude=13.0827, longitude=80.2707, speed=55.0, availability="Available"),
+        models.Vehicle(vehicle_number="TRK-102", registration="TN-38-ZZ", type="Reefer", capacity=12.0, health=62, fuel=92, mileage=24500.0, mileage_kml=8.5, last_service_date="2026-01-10", service_due_date="2026-07-15", gps="Online", latitude=11.0168, longitude=76.9558, speed=0.0, availability="Maintenance"), # Maintenance Overdue
+        models.Vehicle(vehicle_number="TRK-103", registration="KA-01-AP", type="Box Truck", capacity=8.0, health=88, fuel=45, mileage=8620.2, mileage_kml=12.0, last_service_date="2026-07-01", service_due_date="2026-08-15", gps="Online", latitude=12.9716, longitude=77.5946, speed=42.0, availability="Available"), # Maintenance Soon
+        models.Vehicle(vehicle_number="TRK-104", registration="TS-09-LM", type="Flatbed", capacity=20.0, health=78, fuel=15, mileage=32100.8, mileage_kml=9.0, last_service_date="2026-07-10", service_due_date="2026-08-18", gps="Online", latitude=17.3850, longitude=78.4867, speed=0.0, availability="Available"), # Maintenance Soon
+        models.Vehicle(vehicle_number="TRK-105", registration="KA-09-YY", type="Semi-Truck", capacity=15.0, health=100, fuel=100, mileage=1200.0, mileage_kml=11.0, last_service_date="2026-06-20", service_due_date="2026-10-15", gps="Offline", latitude=12.2958, longitude=76.6394, speed=0.0, availability="Available") # Offline
     ]
     db.add_all(vehicles)
     db.commit()
     
     # 3. Create Drivers (Profiles linked to Users)
     drivers = [
-        models.Driver(user_id=driver_users[0].id, name="John Davis", phone="+1 (555) 019-2831", email="john.d@cognifleet.com", address="Oakland, CA", experience=8, availability="Available", working_hours=5.5, rating=4.9, violations=0, health="Good", performance=98.0, vehicle_id=vehicles[0].id, manager_id=admin_user.id),
-        models.Driver(user_id=driver_users[1].id, name="Marcus Rodriguez", phone="+1 (555) 012-9842", email="marcus.r@cognifleet.com", address="Los Angeles, CA", experience=12, availability="Off Duty", working_hours=0.0, rating=4.8, violations=1, health="Good", performance=94.5, vehicle_id=vehicles[1].id, manager_id=admin_user.id),
-        models.Driver(user_id=driver_users[2].id, name="Emily Wong", phone="+1 (555) 015-3382", email="emily.w@cognifleet.com", address="San Jose, CA", experience=4, availability="Available", working_hours=4.0, rating=4.6, violations=0, health="Good", performance=91.0, vehicle_id=vehicles[2].id, manager_id=mgr_user.id),
-        models.Driver(user_id=driver_users[3].id, name="Robert Taylor", phone="+1 (555) 018-4720", email="robert.t@cognifleet.com", address="Richmond, CA", experience=15, availability="Available", working_hours=6.8, rating=4.9, violations=0, health="Good", performance=99.2, vehicle_id=vehicles[3].id, manager_id=mgr_user.id),
-        models.Driver(user_id=driver_users[4].id, name="Lisa Miller", phone="+1 (555) 011-8932", email="lisa.m@cognifleet.com", address="Fremont, CA", experience=2, availability="Available", working_hours=0.0, rating=4.2, violations=2, health="Fair", performance=85.0, vehicle_id=vehicles[4].id, manager_id=mgr_user.id)
+        models.Driver(user_id=driver_users[0].id, name="John Davis", phone="+91 98765 43210", email="john.d@cognifleet.com", address="Chennai, TN", experience=8, availability="Available", working_hours=5.5, rating=4.9, violations=0, health="Good", performance=98.0, vehicle_id=vehicles[0].id, manager_id=admin_user.id),
+        models.Driver(user_id=driver_users[1].id, name="Marcus Rodriguez", phone="+91 87654 32109", email="marcus.r@cognifleet.com", address="Coimbatore, TN", experience=12, availability="Off Duty", working_hours=0.0, rating=4.8, violations=1, health="Good", performance=94.5, vehicle_id=vehicles[1].id, manager_id=admin_user.id),
+        models.Driver(user_id=driver_users[2].id, name="Emily Wong", phone="+91 76543 21098", email="emily.w@cognifleet.com", address="Bengaluru, KA", experience=4, availability="Available", working_hours=4.0, rating=4.6, violations=0, health="Good", performance=91.0, vehicle_id=vehicles[2].id, manager_id=mgr_user.id),
+        models.Driver(user_id=driver_users[3].id, name="Robert Taylor", phone="+91 65432 10987", email="robert.t@cognifleet.com", address="Hyderabad, TS", experience=15, availability="Available", working_hours=6.8, rating=4.9, violations=0, health="Good", performance=99.2, vehicle_id=vehicles[3].id, manager_id=mgr_user.id),
+        models.Driver(user_id=driver_users[4].id, name="Lisa Miller", phone="+91 54321 09876", email="lisa.m@cognifleet.com", address="Mysuru, KA", experience=2, availability="Available", working_hours=0.0, rating=4.2, violations=2, health="Fair", performance=85.0, vehicle_id=vehicles[4].id, manager_id=mgr_user.id)
     ]
     db.add_all(drivers)
     db.commit()
     
     # 4. Create Warehouses
     warehouses = [
-        models.Warehouse(name="San Francisco Hub", location="100 Mission St, San Francisco, CA", capacity=1500.0, occupancy=42.5, inbound=12, outbound=8, inventory=json.dumps([{"item": "Electronics", "qty": 450}, {"item": "Apparel", "qty": 1200}]), dock_appointments=json.dumps([{"time": "09:00 AM", "carrier": "DHL", "status": "Completed"}, {"time": "02:00 PM", "carrier": "FedEx", "status": "Scheduled"}])),
-        models.Warehouse(name="Los Angeles Depot", location="450 Alameda St, Los Angeles, CA", capacity=2500.0, occupancy=78.2, inbound=28, outbound=32, inventory=json.dumps([{"item": "Auto Parts", "qty": 3400}, {"item": "Retail Goods", "qty": 8500}]), dock_appointments=json.dumps([{"time": "10:30 AM", "carrier": "Swift", "status": "Completed"}, {"time": "04:30 PM", "carrier": "UPSt", "status": "Scheduled"}])),
-        models.Warehouse(name="Oakland Terminal", location="700 Maritime St, Oakland, CA", capacity=4000.0, occupancy=15.0, inbound=5, outbound=4, inventory=json.dumps([{"item": "Steel Coils", "qty": 50}, {"item": "Machinery", "qty": 12}]), dock_appointments=json.dumps([{"time": "11:00 AM", "carrier": "XPO", "status": "Completed"}]))
+        models.Warehouse(name="Chennai Warehouse", location="Guindy, Chennai, TN", capacity=1500.0, occupancy=42.5, inbound=12, outbound=8, inventory=json.dumps([{"item": "Electronics", "qty": 450}, {"item": "Apparel", "qty": 1200}]), dock_appointments=json.dumps([{"time": "09:00 AM", "carrier": "DHL", "status": "Completed"}, {"time": "02:00 PM", "carrier": "FedEx", "status": "Scheduled"}])),
+        models.Warehouse(name="Coimbatore Distribution Center", location="Peelamedu, Coimbatore, TN", capacity=2500.0, occupancy=78.2, inbound=28, outbound=32, inventory=json.dumps([{"item": "Auto Parts", "qty": 3400}, {"item": "Retail Goods", "qty": 8500}]), dock_appointments=json.dumps([{"time": "10:30 AM", "carrier": "Swift", "status": "Completed"}, {"time": "04:30 PM", "carrier": "UPSt", "status": "Scheduled"}])),
+        models.Warehouse(name="Bengaluru Hub", location="Electronic City, Bengaluru, KA", capacity=4000.0, occupancy=15.0, inbound=5, outbound=4, inventory=json.dumps([{"item": "Steel Coils", "qty": 50}, {"item": "Machinery", "qty": 12}]), dock_appointments=json.dumps([{"time": "11:00 AM", "carrier": "XPO", "status": "Completed"}]))
     ]
     db.add_all(warehouses)
     db.commit()
     
     # 5. Create Trips
-    # Complete coordinate routes for Leaflet mapping:
-    sf_la_coords = json.dumps([[37.7749, -122.4194], [37.2294, -121.9792], [35.3733, -119.0187], [34.0522, -118.2437]])
-    sf_sj_coords = json.dumps([[37.7749, -122.4194], [37.5485, -121.9886], [37.3382, -121.8863]])
+    chennai_coimbatore_coords = json.dumps([[13.0827, 80.2707], [11.9401, 79.4861], [11.6643, 78.1460], [11.0168, 76.9558]])
+    chennai_bengaluru_coords = json.dumps([[13.0827, 80.2707], [12.8185, 79.6947], [12.9716, 77.5946]])
     
     trips = [
         models.Trip(
-            customer="Tesla Motors", pickup="Oakland Terminal", destination="Los Angeles Depot",
+            customer="Tesla Motors", pickup="Chennai Warehouse", destination="Coimbatore Distribution Center",
             stops=json.dumps([
-                {"location": "Oakland Terminal", "type": "Pickup", "status": "Pending"},
-                {"location": "San Jose Charge Stn", "type": "Inspection", "status": "Pending"},
-                {"location": "Los Angeles Depot", "type": "Delivery", "status": "Pending"}
+                {"location": "Chennai Warehouse", "type": "Pickup", "status": "Pending"},
+                {"location": "Salem Charge Stn", "type": "Inspection", "status": "Pending"},
+                {"location": "Coimbatore Distribution Center", "type": "Delivery", "status": "Pending"}
             ]),
             cargo_type="Batteries", weight=10.5, volume=32.0, vehicle_type="Reefer", required_capacity=12.0,
             priority="High", status="Assigned", pickup_date="2026-07-31", delivery_date="2026-08-01",
             instructions="Maintain battery temp at 20 degrees Celsius. Fragile load.",
             fragile=True, temperature_control=True, insurance=True,
             driver_id=drivers[0].id, vehicle_id=vehicles[0].id,
-            eta="3h 45m", fuel_cost=220.5, revenue=2450.0, distance=620.0, remaining_distance=620.0,
-            route_coordinates=sf_la_coords,
+            eta="3h 45m", fuel_cost=5890.0, fuel_used=62.0, fuel_price=95.0, revenue=24500.0, distance=620.0, remaining_distance=620.0,
+            route_coordinates=chennai_coimbatore_coords,
             history=json.dumps([
                 {"status": "Unassigned", "timestamp": "2026-07-30T10:00:00Z", "notes": "Load registered."},
                 {"status": "Assigned", "timestamp": "2026-07-30T14:30:00Z", "notes": "Assigned to John Davis."}
@@ -1245,34 +1748,34 @@ def seed_database():
             manager_id=admin_user.id
         ),
         models.Trip(
-            customer="Amazon Fulfillment", pickup="San Francisco Hub", destination="Oakland Terminal",
+            customer="Amazon Fulfillment", pickup="Chennai Warehouse", destination="Bengaluru Hub",
             stops=json.dumps([
-                {"location": "San Francisco Hub", "type": "Pickup", "status": "Pending"},
-                {"location": "Oakland Terminal", "type": "Delivery", "status": "Pending"}
+                {"location": "Chennai Warehouse", "type": "Pickup", "status": "Pending"},
+                {"location": "Bengaluru Hub", "type": "Delivery", "status": "Pending"}
             ]),
             cargo_type="Consumer Goods", weight=4.2, volume=18.5, vehicle_type="Box Truck", required_capacity=5.0,
             priority="Medium", status="Unassigned", pickup_date="2026-07-31", delivery_date="2026-07-31",
             instructions="Ensure dropoff occurs before evening shift warehouse lock.",
             driver_id=None, vehicle_id=None,
-            eta="45m", fuel_cost=35.0, revenue=850.0, distance=35.0, remaining_distance=35.0,
-            route_coordinates=sf_sj_coords,
+            eta="45m", fuel_cost=332.5, fuel_used=3.5, fuel_price=95.0, revenue=8500.0, distance=35.0, remaining_distance=35.0,
+            route_coordinates=chennai_bengaluru_coords,
             history=json.dumps([
                 {"status": "Unassigned", "timestamp": "2026-07-31T09:00:00Z", "notes": "Load published to board."}
             ]),
             manager_id=mgr_user.id
         ),
         models.Trip(
-            customer="Walmart Inc", pickup="Los Angeles Depot", destination="San Francisco Hub",
+            customer="Walmart Inc", pickup="Coimbatore Distribution Center", destination="Chennai Warehouse",
             stops=json.dumps([
-                {"location": "Los Angeles Depot", "type": "Pickup", "status": "Completed"},
-                {"location": "San Francisco Hub", "type": "Delivery", "status": "Completed"}
+                {"location": "Coimbatore Distribution Center", "type": "Pickup", "status": "Completed"},
+                {"location": "Chennai Warehouse", "type": "Delivery", "status": "Completed"}
             ]),
             cargo_type="Groceries", weight=12.0, volume=40.0, vehicle_type="Semi-Truck", required_capacity=15.0,
             priority="Critical", status="Completed", pickup_date="2026-07-30", delivery_date="2026-07-30",
             instructions="Urgent grocery restock.",
             driver_id=drivers[3].id, vehicle_id=vehicles[0].id,
-            eta="Arrived", fuel_cost=240.0, revenue=3100.0, distance=620.0, remaining_distance=0.0,
-            route_coordinates=sf_la_coords,
+            eta="Arrived", fuel_cost=5890.0, fuel_used=62.0, fuel_price=95.0, revenue=31000.0, distance=620.0, remaining_distance=0.0,
+            route_coordinates=chennai_coimbatore_coords,
             history=json.dumps([
                 {"status": "Unassigned", "timestamp": "2026-07-29T08:00:00Z", "notes": "Load created."},
                 {"status": "Assigned", "timestamp": "2026-07-29T10:00:00Z", "notes": "Assigned to Robert Taylor."},
@@ -1308,9 +1811,10 @@ def seed_database():
     
     # 8. Create Alerts
     alerts = [
-        models.Alert(severity="Critical", title="Engine Thermostat Failure", description="Engine head temperature exceeded 225F. Immediate checkup required.", vehicle_number="TRK-102", driver_name="Marcus Rodriguez", location="Los Angeles Depot Depot", timestamp=datetime.datetime.utcnow() - datetime.timedelta(hours=2), resolved=False),
-        models.Alert(severity="Medium", title="Low Fuel Level Detected", description="Fuel level dropped below 15%. Range remaining: 45 miles.", vehicle_number="TRK-104", driver_name="Robert Taylor", location="Richmond Hub", timestamp=datetime.datetime.utcnow() - datetime.timedelta(hours=1), resolved=False),
-        models.Alert(severity="Low", title="GPS Signal Loss Warning", description="GPS tracking module disconnected for 15 minutes. Switched to cellular triangulations.", vehicle_number="TRK-105", driver_name="Lisa Miller", location="Fremont, CA", timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=45), resolved=False)
+        models.Alert(severity="Critical", priority="Critical", title="Engine Thermostat Failure", description="Engine head temperature exceeded 225F. Immediate checkup required.", vehicle_number="TRK-102", driver_name="Marcus Rodriguez", location="Coimbatore Distribution Center", timestamp=datetime.datetime.utcnow() - datetime.timedelta(hours=2), resolved=False, acknowledged=False),
+        models.Alert(severity="High", priority="High", title="Mechanical Service Required", description="Brake pad thickness below safety threshold.", vehicle_number="TRK-104", driver_name="Robert Taylor", location="Hyderabad, TS", timestamp=datetime.datetime.utcnow() - datetime.timedelta(hours=1, minutes=30), resolved=False, acknowledged=False),
+        models.Alert(severity="Medium", priority="Warning", title="Low Fuel Level Detected", description="Fuel level dropped below 15%. Range remaining: 45 miles.", vehicle_number="TRK-104", driver_name="Robert Taylor", location="Hyderabad, TS", timestamp=datetime.datetime.utcnow() - datetime.timedelta(hours=1), resolved=False, acknowledged=False),
+        models.Alert(severity="Low", priority="Information", title="GPS Signal Loss Warning", description="GPS tracking module disconnected for 15 minutes. Switched to cellular triangulations.", vehicle_number="TRK-105", driver_name="Lisa Miller", location="Mysuru, KA", timestamp=datetime.datetime.utcnow() - datetime.timedelta(minutes=45), resolved=False, acknowledged=False)
     ]
     db.add_all(alerts)
     db.commit()
@@ -1327,3 +1831,57 @@ def seed_database():
     db.commit()
     
     print("Database seeding completed successfully.")
+
+# --- Messaging Router ---
+
+@app.post("/api/messages", response_model=schemas.MessageResponse)
+async def send_message(msg: schemas.MessageCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_msg = models.Message(
+        sender_id=current_user.id,
+        receiver_id=msg.receiver_id,
+        content=msg.content
+    )
+    db.add(db_msg)
+    db.commit()
+    db.refresh(db_msg)
+    
+    # If sender is driver, create a manager Notification Alert
+    if current_user.role == "driver":
+        driver = db.query(models.Driver).filter(models.Driver.user_id == current_user.id).first()
+        driver_name = driver.name if driver else (current_user.full_name or current_user.username)
+        vehicle_no = driver.vehicle.vehicle_number if (driver and driver.vehicle) else "TRK"
+        
+        alert = models.Alert(
+            severity="Low",
+            priority="Low",
+            title=f"Driver Message from {driver_name}",
+            description=f"Driver: {driver_name} | Vehicle: {vehicle_no} | Message: \"{msg.content}\"",
+            driver_name=driver_name,
+            vehicle_number=vehicle_no,
+            timestamp=datetime.datetime.utcnow(),
+            driver_id=driver.id if driver else None,
+            manager_id=msg.receiver_id
+        )
+        db.add(alert)
+        db.commit()
+        await manager.broadcast({"type": "REFRESH_DATA", "module": "alerts"})
+        
+    msg_data = schemas.MessageResponse.from_orm(db_msg).dict()
+    msg_data['timestamp'] = msg_data['timestamp'].isoformat()
+    await manager.broadcast({"type": "NEW_MESSAGE", "message": msg_data})
+    return db_msg
+
+@app.get("/api/messages/{other_user_id}", response_model=List[schemas.MessageResponse])
+def get_messages(other_user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    msgs = db.query(models.Message).filter(
+        ((models.Message.sender_id == current_user.id) & (models.Message.receiver_id == other_user_id)) |
+        ((models.Message.sender_id == other_user_id) & (models.Message.receiver_id == current_user.id))
+    ).order_by(models.Message.timestamp.asc()).all()
+    
+    unread = [m for m in msgs if m.receiver_id == current_user.id and not m.is_read]
+    for m in unread:
+        m.is_read = True
+    if unread:
+        db.commit()
+        
+    return msgs
