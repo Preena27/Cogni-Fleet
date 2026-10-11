@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../App';
 import { useSettings } from '../contexts/SettingsContext';
+import { API_BASE } from '../config';
 import { 
   Layers, 
   Search, 
@@ -142,8 +143,8 @@ export default function LoadsModule() {
 
       const isEdit = formData.id !== undefined;
       const url = isEdit 
-        ? `http://localhost:8000/api/trips/${formData.id}` 
-        : 'http://localhost:8000/api/trips';
+        ? `/api/trips/${formData.id}` 
+        : '/api/trips';
       const method = isEdit ? 'PUT' : 'POST';
 
       const res = await secureFetch(url, {
@@ -230,7 +231,7 @@ export default function LoadsModule() {
   const handleConfirmDelete = async () => {
     if (!tripToDelete) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/trips/${tripToDelete.id}`, {
+      const res = await secureFetch(`/api/trips/${tripToDelete.id}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -251,7 +252,7 @@ export default function LoadsModule() {
 
   const handleAcceptLoad = async (trip: Trip) => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/trips/${trip.id}`, {
+      const res = await secureFetch(`/api/trips/${trip.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...trip, status: 'Accepted' })
@@ -285,7 +286,7 @@ export default function LoadsModule() {
     
     setAiLoading(true);
     try {
-      const res = await secureFetch(`http://localhost:8000/api/trips/${selectedTrip.id}/manual-assign`, {
+      const res = await secureFetch(`/api/trips/${selectedTrip.id}/manual-assign`, {
         method: 'POST',
         body: JSON.stringify({
           driver_id: parseInt(selectedDriverId),
@@ -320,13 +321,11 @@ export default function LoadsModule() {
     setAutoAssignResult(null);
 
     try {
-      const res = await secureFetch(`https://api.agents.snsihub.ai/webhook/trips`, {
+      // Route auto-assignment through our own backend, which owns the agent
+      // webhook integration. Calling the third-party webhook directly from the
+      // browser leaked the user's JWT to an external service.
+      const res = await secureFetch(`${API_BASE}/trips/${trip.id}/auto-assign`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          trip_id: trip.id,
-          weight: trip.weight // adjust field name to match your actual Trip type
-        })
       });
       if (res.ok) {
         const data = await res.json();
@@ -537,7 +536,7 @@ export default function LoadsModule() {
     }));
 
     try {
-      const res = await secureFetch('http://localhost:8000/api/trips/bulk', {
+      const res = await secureFetch('/api/trips/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

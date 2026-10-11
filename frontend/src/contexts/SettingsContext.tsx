@@ -58,7 +58,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const fetchSettings = async () => {
     if (!isLoggedIn) return;
     try {
-      const res = await secureFetch("http://localhost:8000/api/settings");
+      const res = await secureFetch("/api/settings");
       if (res.ok) {
         const data = await res.json();
         setSettings(prev => ({ ...prev, ...data }));

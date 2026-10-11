@@ -30,7 +30,7 @@ export default function LoginPage({ onBackToHome }: LoginPageProps) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, role: selectedRole })
@@ -85,7 +85,7 @@ export default function LoginPage({ onBackToHome }: LoginPageProps) {
         phone: signupPhone
       };
       
-      const res = await fetch('http://localhost:8000/api/auth/register', {
+      const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -93,7 +93,7 @@ export default function LoginPage({ onBackToHome }: LoginPageProps) {
       
       if (res.ok) {
         // Automatically perform login
-        const loginRes = await fetch('http://localhost:8000/api/auth/login', {
+        const loginRes = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: signupUsername, password: signupPassword, role: 'manager' })

@@ -34,7 +34,7 @@ export default function Dashboard() {
   const [aiBriefing, setAiBriefing] = React.useState<any>(null);
 
   React.useEffect(() => {
-    secureFetch('http://localhost:8000/api/ai/intelligence')
+    secureFetch('/api/ai/intelligence')
       .then(res => res.ok ? res.json() : null)
       .then(data => data && setAiBriefing(data.daily_briefing))
       .catch(console.error);

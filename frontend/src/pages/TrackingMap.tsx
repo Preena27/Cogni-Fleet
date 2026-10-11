@@ -25,7 +25,7 @@ const calculateFuelAnalytics = (distance: number, vehicle: any) => {
 };
 
 export default function TrackingMap() {
-  const { vehicles, trips, drivers, refreshAll } = useAppContext();
+  const { vehicles, trips, drivers, refreshAll, secureFetch } = useAppContext();
   const { settings } = useSettings();
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -159,7 +159,7 @@ export default function TrackingMap() {
   const triggerSimulation = async (tripId: number, eventType: string) => {
     setLoadingEvent(eventType);
     try {
-      await fetch(`http://localhost:8000/api/trips/${tripId}/simulate-event?event_type=${eventType}`, {
+      await secureFetch(`/api/trips/${tripId}/simulate-event?event_type=${eventType}`, {
         method: 'POST'
       });
       // Do NOT trigger toast popups. The backend automation directly creates an Alert row 

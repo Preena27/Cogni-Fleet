@@ -37,7 +37,7 @@ export default function AIAssistant() {
   const fetchIntelligence = async () => {
     setLoadingIntel(true);
     try {
-      const res = await secureFetch('http://localhost:8000/api/ai/intelligence');
+      const res = await secureFetch('/api/ai/intelligence');
       if (res.ok) {
         const data = await res.json();
         setIntel(data);
@@ -68,7 +68,7 @@ export default function AIAssistant() {
   const handleExecuteAction = async (rec: any) => {
     setActionLoading(rec.id);
     try {
-      const res = await secureFetch('http://localhost:8000/api/ai/execute-recommendation', {
+      const res = await secureFetch('/api/ai/execute-recommendation', {
         method: 'POST',
         body: JSON.stringify({
           action_type: rec.action_type,
@@ -108,7 +108,7 @@ export default function AIAssistant() {
     setLoadingChat(true);
 
     try {
-      const res = await secureFetch('http://localhost:8000/api/ai-assistant', {
+      const res = await secureFetch('/api/ai-assistant', {
         method: 'POST',
         body: JSON.stringify({
           query: userText,
@@ -130,9 +130,22 @@ export default function AIAssistant() {
     }
   };
 
+  // Escape untrusted model output before it is turned into HTML. The markdown
+  // patterns below are applied after escaping, so only our own tags are parsed.
+  const escapeHtml = (value: string): string =>
+    value.replace(/[&<>"']/g, (char) => {
+      switch (char) {
+        case '&': return '&amp;';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '"': return '&quot;';
+        default: return '&#39;';
+      }
+    });
+
   // Safe Markdown Parser
   const parseMarkdown = (text: string) => {
-    let html = text;
+    let html = escapeHtml(text);
     html = html.replace(/^### (.*$)/gim, '<h4 class="font-bold text-xs uppercase text-indigo-600 dark:text-indigo-400 mt-2 mb-1 flex items-center gap-1">$1</h4>');
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-slate-850 dark:text-slate-100">$1</strong>');
     html = html.replace(/^\s*[-*]\s+(.*$)/gim, '<li class="ml-3 list-disc pl-1">$1</li>');
