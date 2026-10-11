@@ -5,7 +5,15 @@ that nothing sensitive lives in source control. See ``backend/.env.example``.
 """
 import os
 import secrets
+from pathlib import Path
 from typing import List
+
+from dotenv import load_dotenv
+
+# Load variables from a local backend/.env file (if present) before anything
+# reads from os.environ. Resolved relative to this file so it works regardless
+# of the current working directory. Real environment variables take precedence.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def _csv_env(name: str, default: str) -> List[str]:
