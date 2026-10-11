@@ -62,7 +62,7 @@ Thank you for your business!
 
   const updateInvoiceStatus = async (invoiceId: number, status: 'Paid' | 'Pending') => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/invoices/${invoiceId}?status=${status}`, {
+      const res = await secureFetch(`/api/invoices/${invoiceId}?status=${status}`, {
         method: 'PUT'
       });
       if (res.ok) {

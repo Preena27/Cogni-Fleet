@@ -249,7 +249,7 @@ export default function DriverApp() {
       interval = setInterval(async () => {
         try {
           const delta = 2.0; // 2 km per tick
-          await secureFetch(`http://localhost:8000/api/trips/${activeTrip.id}/progress`, {
+          await secureFetch(`/api/trips/${activeTrip.id}/progress`, {
             method: 'POST',
             body: JSON.stringify({ distance_delta: delta, speed: simSpeed })
           });
@@ -384,7 +384,7 @@ export default function DriverApp() {
     // Optimistic Update for immediate UI feedback
     setDriverTrips(prev => prev.map(t => t.id === tripId ? { ...t, status: accept ? 'Accepted' : 'Unassigned' } : t));
     
-    const endpoint = `http://localhost:8000/api/trips/${tripId}/accept?accept=${accept}${!accept ? `&reason=${encodeURIComponent(rejectReason + ': ' + rejectNotes)}` : ''}`;
+    const endpoint = `/api/trips/${tripId}/accept?accept=${accept}${!accept ? `&reason=${encodeURIComponent(rejectReason + ': ' + rejectNotes)}` : ''}`;
     
     if (!isOnline) {
       await queueForSync(endpoint, 'POST', null);
@@ -421,7 +421,7 @@ export default function DriverApp() {
     setIsPaused(false);
     setSimProgress(0);
     
-    const endpoint = `http://localhost:8000/api/trips/${tripId}/start`;
+    const endpoint = `/api/trips/${tripId}/start`;
     
     if (!isOnline) {
       await queueForSync(endpoint, 'POST', null);
@@ -446,7 +446,7 @@ export default function DriverApp() {
 
   // Pause / Resume Trip Simulation
   const handlePauseResume = async (tripId: number, pause: boolean) => {
-    const endpoint = `http://localhost:8000/api/trips/${tripId}/${pause ? 'pause' : 'resume'}`;
+    const endpoint = `/api/trips/${tripId}/${pause ? 'pause' : 'resume'}`;
     
     if (!isOnline) {
       await queueForSync(endpoint, 'POST', null);
@@ -477,7 +477,7 @@ export default function DriverApp() {
   const handleSubmitStoppedReason = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTrip) return;
-    const endpoint = `http://localhost:8000/api/trips/${activeTrip.id}/stopped-reason`;
+    const endpoint = `/api/trips/${activeTrip.id}/stopped-reason`;
     const payload = {
       reason: stoppedReasonSelection,
       location: "I-5 Highway Mile 182",
@@ -529,7 +529,7 @@ export default function DriverApp() {
 
     const calculatedPriority = (['Vehicle Breakdown', 'Accident', 'Medical Emergency', 'Engine Problem'].includes(issueType)) ? 'Critical' : issuePriority;
 
-    const endpoint = `http://localhost:8000/api/trips/${activeTrip.id}/report-issue`;
+    const endpoint = `/api/trips/${activeTrip.id}/report-issue`;
     const payload = {
       issue_type: issueType,
       description: issueDesc || issueType,
@@ -571,7 +571,7 @@ export default function DriverApp() {
       addToast("No active trip", "Critical alarms require active load logs.", "warning");
       return;
     }
-    const endpoint = `http://localhost:8000/api/trips/${activeTrip.id}/sos`;
+    const endpoint = `/api/trips/${activeTrip.id}/sos`;
     const payload = { gps: "11.6643, 78.1460" };
 
     if (!isOnline) {
@@ -638,7 +638,7 @@ export default function DriverApp() {
 
     // 1. Submit POD record to backend database (so Manager Dashboard receives it!)
     try {
-      await secureFetch(`http://localhost:8000/api/pods/submit`, {
+      await secureFetch(`/api/pods/submit`, {
         method: 'POST',
         body: JSON.stringify({
           trip_id: tripId,
@@ -653,7 +653,7 @@ export default function DriverApp() {
     }
 
     // 2. Complete trip on backend
-    const endpoint = `http://localhost:8000/api/trips/${tripId}/end`;
+    const endpoint = `/api/trips/${tripId}/end`;
     const payload = {
       duration: 462.5,
       average_speed: 51.8,
@@ -761,7 +761,7 @@ export default function DriverApp() {
   // Upload proof of delivery files
   const handlePhotoCaptureConfirm = async (base64Image: string) => {
     if (!activeTrip) return;
-    const endpoint = 'http://localhost:8000/api/pods/submit';
+    const endpoint = '/api/pods/submit';
     
     let lat = 13.0827;
     let lng = 80.2707;
@@ -813,7 +813,7 @@ export default function DriverApp() {
       return;
     }
     try {
-      const res = await secureFetch(`http://localhost:8000/api/drivers/${driver.id}`, {
+      const res = await secureFetch(`/api/drivers/${driver.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           ...driver,

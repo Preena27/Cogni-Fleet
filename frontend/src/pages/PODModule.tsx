@@ -15,7 +15,7 @@ export default function PODModule() {
 
   const handleApprove = async (podId: number) => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/pods/${podId}?status=Approved`, {
+      const res = await secureFetch(`/api/pods/${podId}?status=Approved`, {
         method: 'PUT'
       });
       if (res.ok) {
@@ -30,7 +30,7 @@ export default function PODModule() {
 
   const handleReject = async (podId: number) => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/pods/${podId}?status=Rejected`, {
+      const res = await secureFetch(`/api/pods/${podId}?status=Rejected`, {
         method: 'PUT'
       });
       if (res.ok) {
@@ -45,7 +45,7 @@ export default function PODModule() {
 
   const handleRequestReupload = async (podId: number) => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/pods/${podId}?status=Re-upload Requested`, {
+      const res = await secureFetch(`/api/pods/${podId}?status=Re-upload Requested`, {
         method: 'PUT'
       });
       if (res.ok) {
@@ -60,7 +60,7 @@ export default function PODModule() {
 
   const handleDeletePOD = async (podId: number) => {
     try {
-      const res = await secureFetch(`http://localhost:8000/api/pods/${podId}`, {
+      const res = await secureFetch(`/api/pods/${podId}`, {
         method: 'DELETE'
       });
       if (res.ok) {

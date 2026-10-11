@@ -71,7 +71,7 @@ export default function FleetModule() {
     e.preventDefault();
     if (!editVehicle.id) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/vehicles/${editVehicle.id}`, {
+      const res = await secureFetch(`/api/vehicles/${editVehicle.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editVehicle)
@@ -91,7 +91,7 @@ export default function FleetModule() {
     e.preventDefault();
     if (!selectedVehicle?.id) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/vehicles/${selectedVehicle.id}/refuel`, {
+      const res = await secureFetch(`/api/vehicles/${selectedVehicle.id}/refuel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fuel_added: refuelAmount })
@@ -115,7 +115,7 @@ export default function FleetModule() {
   const completeMaintenance = async (vehicleId: number) => {
     setMaintLoading(true);
     try {
-      const res = await secureFetch(`http://localhost:8000/api/vehicles/${vehicleId}/maintenance/complete`, {
+      const res = await secureFetch(`/api/vehicles/${vehicleId}/maintenance/complete`, {
         method: 'POST'
       });
       if (res.ok) {
@@ -150,7 +150,7 @@ export default function FleetModule() {
   const handleAddVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await secureFetch('http://localhost:8000/api/vehicles', {
+      const res = await secureFetch('/api/vehicles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newVehicle)
@@ -188,7 +188,7 @@ export default function FleetModule() {
         health: Math.min(100, v.health + 20) // Repair bumps health
       };
 
-      const res = await secureFetch(`http://localhost:8000/api/vehicles/${vehicleId}`, {
+      const res = await secureFetch(`/api/vehicles/${vehicleId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
@@ -196,7 +196,7 @@ export default function FleetModule() {
 
       if (res.ok) {
         // Send a custom automation simulation step log
-        await secureFetch(`http://localhost:8000/api/trips/1/simulate-event?event_type=traffic`, { method: 'POST' }); // Arbitrary event to show log sync
+        await secureFetch(`/api/trips/1/simulate-event?event_type=traffic`, { method: 'POST' }); // Arbitrary event to show log sync
         addToast("Service Dispatched", `Vehicle ${v.vehicle_number} scheduled for maintenance and parts overhaul.`, "warning");
         refreshData('vehicles');
         setSelectedVehicle(null);

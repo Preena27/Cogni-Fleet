@@ -114,7 +114,7 @@ export default function SettingsModule() {
 
     // Save Settings
     try {
-      await secureFetch("http://localhost:8000/api/settings", {
+      await secureFetch("/api/settings", {
         method: "PUT",
         body: JSON.stringify({
           language,
@@ -171,7 +171,7 @@ export default function SettingsModule() {
 
     setPwdLoading(true);
     try {
-      const res = await secureFetch("http://localhost:8000/api/auth/change-password", {
+      const res = await secureFetch("/api/auth/change-password", {
         method: "POST",
         body: JSON.stringify({
           current_password: currentPassword,
@@ -208,7 +208,7 @@ export default function SettingsModule() {
     
     setResetting(true);
     try {
-      const res = await secureFetch("http://localhost:8000/api/system/reset", { method: "POST" });
+      const res = await secureFetch("/api/system/reset", { method: "POST" });
       if (res.ok) await refreshAll();
     } catch (e) {
       console.error(e);

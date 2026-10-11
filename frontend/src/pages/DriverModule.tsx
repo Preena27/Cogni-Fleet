@@ -50,7 +50,7 @@ export default function DriverModule() {
       return;
     }
     try {
-      const res = await secureFetch('http://localhost:8000/api/drivers', {
+      const res = await secureFetch('/api/drivers', {
         method: 'POST',
         body: JSON.stringify({
           name: newDriver.name,
@@ -89,7 +89,7 @@ export default function DriverModule() {
     e.preventDefault();
     if (!selectedDriver) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/drivers/${selectedDriver.id}`, {
+      const res = await secureFetch(`/api/drivers/${selectedDriver.id}`, {
         method: 'PUT',
         body: JSON.stringify(editDriverData)
       });
@@ -137,7 +137,7 @@ export default function DriverModule() {
     if (!messageText.trim() || !activeMessageDriver) return;
     
     try {
-      const res = await secureFetch('http://localhost:8000/api/messages', {
+      const res = await secureFetch('/api/messages', {
         method: 'POST',
         body: JSON.stringify({
           receiver_id: activeMessageDriver.user_id,

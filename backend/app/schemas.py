@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any
 from datetime import datetime
 
@@ -26,9 +26,7 @@ class MessageResponse(MessageBase):
     sender_id: int
     timestamp: datetime
     is_read: bool
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # User Schemas
 class UserBase(BaseModel):
     username: str
@@ -46,9 +44,7 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     id: int
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 class UserProfileUpdateSchema(BaseModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
@@ -97,9 +93,7 @@ class UserSettingsUpdate(UserSettingsBase):
 class UserSettingsResponse(UserSettingsBase):
     id: int
     user_id: int
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Vehicle Schemas
 class VehicleBase(BaseModel):
     vehicle_number: str
@@ -162,9 +156,7 @@ class VehicleUpdate(BaseModel):
 
 class VehicleResponse(VehicleBase):
     id: int
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 class RefuelRequest(BaseModel):
     fuel_added: float
 
@@ -214,9 +206,7 @@ class DriverCreate(DriverBase):
 class DriverResponse(DriverBase):
     id: int
     user_id: Optional[int] = None
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Trip / Load Schemas
 class TripBase(BaseModel):
     customer: str
@@ -283,9 +273,7 @@ class TripBulkImportItem(BaseModel):
 
 class TripResponse(TripBase):
     id: int
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Warehouse Schemas
 class WarehouseBase(BaseModel):
     name: str
@@ -302,9 +290,7 @@ class WarehouseCreate(WarehouseBase):
 
 class WarehouseResponse(WarehouseBase):
     id: int
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Proof Of Delivery Schemas
 class ProofOfDeliveryBase(BaseModel):
     trip_id: int
@@ -325,9 +311,7 @@ class ProofOfDeliveryCreate(ProofOfDeliveryBase):
 class ProofOfDeliveryResponse(ProofOfDeliveryBase):
     id: int
     submitted_at: datetime
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Invoice Schemas
 class InvoiceBase(BaseModel):
     invoice_number: str
@@ -345,9 +329,7 @@ class InvoiceCreate(InvoiceBase):
 class InvoiceResponse(InvoiceBase):
     id: int
     created_at: datetime
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Alert Schemas
 class AlertBase(BaseModel):
     severity: str
@@ -368,9 +350,7 @@ class AlertCreate(AlertBase):
 class AlertResponse(AlertBase):
     id: int
     timestamp: datetime
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # Automation Log Schemas
 class AutomationLogBase(BaseModel):
     trigger_event: str
@@ -381,9 +361,7 @@ class AutomationLogBase(BaseModel):
 class AutomationLogResponse(AutomationLogBase):
     id: int
     timestamp: datetime
-    class Config:
-        from_attributes = True
-
+    model_config = ConfigDict(from_attributes=True)
 # AI Assistant Query Schema
 class AIMessage(BaseModel):
     role: str
@@ -404,3 +382,10 @@ class DriverCreateRequest(BaseModel):
     emergency_contact: Optional[str] = None
     current_location: Optional[str] = None
     experience: Optional[int] = 0
+
+
+# Authentication payloads
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    role: Optional[str] = None

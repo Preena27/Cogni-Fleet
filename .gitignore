@@ -9,6 +9,11 @@ __pycache__/
 fleet.db
 backend/fleet.db
 
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
 # Node & Frontend
 node_modules/
 dist/

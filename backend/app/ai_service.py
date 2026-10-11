@@ -12,16 +12,30 @@ from openai import OpenAI
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key) if api_key else None
 
-def get_full_fleet_intelligence(db: Session) -> Dict[str, Any]:
+def get_full_fleet_intelligence(db: Session, manager_id: int | None = None) -> Dict[str, Any]:
     """
     Comprehensive Fleet Data Extraction & Relational Intelligence Analysis.
     Reads real database models: Driver, Vehicle, Trip, Alert, Invoice, ProofOfDelivery.
+
+    When ``manager_id`` is provided, only that manager's data is analysed.
     """
-    drivers = db.query(Driver).all()
-    vehicles = db.query(Vehicle).all()
-    trips = db.query(Trip).all()
-    alerts = db.query(Alert).filter(Alert.resolved == False).all()
-    invoices = db.query(Invoice).all()
+    drivers_q = db.query(Driver)
+    vehicles_q = db.query(Vehicle)
+    trips_q = db.query(Trip)
+    alerts_q = db.query(Alert).filter(Alert.resolved == False)  # noqa: E712
+    invoices_q = db.query(Invoice)
+    if manager_id is not None:
+        drivers_q = drivers_q.filter(Driver.manager_id == manager_id)
+        vehicles_q = vehicles_q.filter(Vehicle.manager_id == manager_id)
+        trips_q = trips_q.filter(Trip.manager_id == manager_id)
+        alerts_q = alerts_q.filter(Alert.manager_id == manager_id)
+        invoices_q = invoices_q.filter(Invoice.manager_id == manager_id)
+
+    drivers = drivers_q.all()
+    vehicles = vehicles_q.all()
+    trips = trips_q.all()
+    alerts = alerts_q.all()
+    invoices = invoices_q.all()
 
     # 1. Vehicle Financial & Relational Metrics
     vehicle_metrics = []
@@ -325,12 +339,17 @@ def get_full_fleet_intelligence(db: Session) -> Dict[str, Any]:
         "underutilized_drivers": underutilized_drivers
     }
 
-def ask_ai_assistant(query: str, db: Session, conversation: List[Dict[str, str]] | None = None) -> str:
+def ask_ai_assistant(
+    query: str,
+    db: Session,
+    conversation: List[Dict[str, str]] | None = None,
+    manager_id: int | None = None,
+) -> str:
     """
     Universal System Analysis & Specific Entity AI Query Router.
     Analyzes full CogniFleet SQL database state and returns exact quantitative answers.
     """
-    intel = get_full_fleet_intelligence(db)
+    intel = get_full_fleet_intelligence(db, manager_id=manager_id)
     q = query.lower().strip()
 
     # 1. OpenAI API Response (if API key available)
@@ -620,14 +639,19 @@ def ask_ai_assistant(query: str, db: Session, conversation: List[Dict[str, str]]
         
         return res
 
-def evaluate_auto_assignment(trip_id: int, db: Session) -> List[Dict[str, Any]]:
+def evaluate_auto_assignment(trip_id: int, db: Session, manager_id: int | None = None) -> List[Dict[str, Any]]:
     """Evaluates all available drivers and vehicles and ranks the top 5 combinations for a specific trip."""
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
         return []
 
-    drivers = db.query(Driver).all()
-    vehicles = db.query(Vehicle).all()
+    drivers_q = db.query(Driver)
+    vehicles_q = db.query(Vehicle)
+    if manager_id is not None:
+        drivers_q = drivers_q.filter(Driver.manager_id == manager_id)
+        vehicles_q = vehicles_q.filter(Vehicle.manager_id == manager_id)
+    drivers = drivers_q.all()
+    vehicles = vehicles_q.all()
     recommendations = []
     
     for driver in drivers:

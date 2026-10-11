@@ -26,10 +26,7 @@ import {
   Compass
 } from 'lucide-react';
 import { User, Trip, Driver, Vehicle, Warehouse, ProofOfDelivery, Invoice, Alert, AutomationLog } from './types';
-
-// Establish API URL
-const API_BASE = 'http://localhost:8000/api';
-const WS_BASE = 'ws://localhost:8000/ws';
+import { API_BASE, getWebSocketUrl } from './config';
 
 // Global Context Definition
 interface AppContextType {
@@ -189,7 +186,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (res.ok) {
         const data = await res.json();
         setter(data);
-        if (endpoint === 'drivers' && localStorage.getItem("userRole") === 'driver' && Array.isArray(data) && data.length > 0) {
+        if (endpoint === 'drivers' && localStorage.getItem("role") === 'driver' && Array.isArray(data) && data.length > 0) {
           localStorage.setItem("driverId", String(data[0].id));
         }
       }
@@ -233,7 +230,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let ws: WebSocket;
     const connectWS = () => {
-      ws = new WebSocket(WS_BASE);
+      ws = new WebSocket(getWebSocketUrl());
       
       ws.onopen = () => {
         console.log("WebSocket connected to FastAPI");
@@ -246,7 +243,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (data.type === 'AUTOMATION_LOG') {
           const userIdStr = localStorage.getItem("userId");
           const userId = userIdStr ? parseInt(userIdStr) : null;
-          const userRole = localStorage.getItem("userRole");
+          const userRole = localStorage.getItem("role");
 
           if (userRole === 'manager') {
             if (data.log.manager_id && data.log.manager_id !== userId) return;

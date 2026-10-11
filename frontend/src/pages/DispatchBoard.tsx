@@ -59,7 +59,7 @@ export default function DispatchBoard() {
         status: newStatus
       };
 
-      const res = await secureFetch(`http://localhost:8000/api/trips/${tripId}`, {
+      const res = await secureFetch(`/api/trips/${tripId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)

@@ -30,7 +30,7 @@ export default function MessagesModule() {
   const fetchMessages = async () => {
     if (!targetUserId) return;
     try {
-      const res = await secureFetch(`http://localhost:8000/api/messages/${targetUserId}`);
+      const res = await secureFetch(`/api/messages/${targetUserId}`);
       if (res.ok) {
         const data = await res.json();
         setMessages(data);
@@ -55,7 +55,7 @@ export default function MessagesModule() {
     if (!inputText.trim() || !targetUserId) return;
 
     try {
-      const res = await secureFetch('http://localhost:8000/api/messages', {
+      const res = await secureFetch('/api/messages', {
         method: 'POST',
         body: JSON.stringify({
           receiver_id: targetUserId,
