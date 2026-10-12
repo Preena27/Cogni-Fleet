@@ -5,6 +5,29 @@ AI-assisted fleet management for dispatch managers and drivers.
 - **Backend** — FastAPI + SQLAlchemy + SQLite (optional OpenAI integration)
 - **Frontend** — React 19 + TypeScript + Vite + Tailwind
 
+## How it fits together
+
+```
+React SPA ── secureFetch (JWT) ──► /api/*  ─┐
+          └─ WebSocket /ws?token=… ─────────┤
+                                           ▼
+                                  FastAPI routers (auth, trips, vehicles, …)
+                                           │  auth → tenant scoping → handler
+                                           ▼
+                       automation pipelines · AI intelligence · seed
+                                           │  SQLAlchemy ORM
+                                           ▼
+                              Database (SQLite by default)
+
+Multi-tenant: every row carries manager_id; managers see only their own fleet,
+drivers only their assigned trips. Lifecycle events (assign/accept/breakdown/
+complete) run automation pipelines that log, alert, invoice and push realtime
+updates. The AI advisor derives all of its answers from live database state.
+```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design — tiers,
+data model, request lifecycle, workflows, realtime layer, and known trade-offs.
+
 ---
 
 ## Quick start
