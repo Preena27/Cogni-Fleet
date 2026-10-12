@@ -77,14 +77,238 @@ Three conceptual layers:
 Key architectural choices:
 
 - **Stateless HTTP API + a single broadcast WebSocket.** The client refetches on
-  signal rather than receiving granular deltas (see §8).
+  signal rather than receiving granular deltas (see §9).
 - **Domain-modular routers** behind one app — one deployable unit, one database.
 - **Shared-nothing tenants in one schema**: every tenant-owned row carries
   `manager_id`, and all queries are filtered by it (single-DB multi-tenancy).
 
 ---
 
-## 3. Request lifecycle (authorization and scoping)
+## 3. How the tiers connect
+
+The frontend never touches the database directly — it only talks to the API, and
+the backend is the only process that opens a database connection. There are three
+distinct connections.
+
+```
+┌─────────────────────────┐
+│   BROWSER / React SPA    │
+│   (localhost:5173)       │
+└───────┬─────────┬───────┘
+        │         │
+   (1) HTTP   (2) WebSocket
+   /api/*      /ws?token=
+        │         │
+        ▼         ▼
+┌─────────────────────────┐
+│   Vite dev proxy         │   ← dev only; in prod a reverse proxy plays this role
+│   /api → :8000           │
+│   /ws  → :8000 (ws)      │
+└───────┬─────────┬───────┘
+        │         │
+        ▼         ▼
+┌─────────────────────────┐
+│   FASTAPI BACKEND        │   (localhost:8000)
+│   routers → Depends(get_db) → SQLAlchemy Session
+└───────────┬─────────────┘
+            │ (3) SQL over a connection pool
+            ▼
+┌─────────────────────────┐
+│   DATABASE (SQLite file) │   fleet.db
+└─────────────────────────┘
+```
+
+### 3.1 Connection 1 — frontend → backend over HTTP (the data path)
+
+**Addressing.** `frontend/src/config.ts`:
+
+```ts
+export const API_BASE = configured ? `${configured}/api` : '/api';
+```
+
+By default `API_BASE` is a **relative, same-origin** URL (`/api`), so the browser
+sends requests to the dev server origin, not to the backend directly. Set
+`VITE_API_BASE` at build time to target a different origin.
+
+**The proxy.** `frontend/vite.config.ts` forwards those paths to FastAPI in dev:
+
+```ts
+server: { proxy: {
+  '/api': { target: 'http://localhost:8000', changeOrigin: true },
+  '/ws':  { target: 'ws://localhost:8000', ws: true },
+}}
+```
+
+So `GET http://localhost:5173/api/trips` is transparently forwarded to
+`GET http://localhost:8000/api/trips`. The browser only ever sees one origin —
+which is why CORS is not needed in development.
+
+**Authentication.** Login (`routers/auth.py`) returns a JWT:
+
+```python
+access_token = create_access_token(data={"sub": db_user.username, "role": db_user.role})
+return {"access_token": access_token, "role": ..., "username": ..., "id": ...}
+```
+
+The frontend stores the token (and role/user ids) in `localStorage`. Every call
+goes through `secureFetch` in `App.tsx`, which injects the header and handles
+expiry:
+
+```ts
+const secureFetch = async (url, options = {}) => {
+  const token = localStorage.getItem("token");
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) { localStorage.clear(); setIsLoggedIn(false); }  // global sign-out
+  return res;
+};
+```
+
+**Backend side.** FastAPI injects `Depends(get_db)` (a database session) and
+`Depends(get_current_user)` (decodes the JWT and loads the `User`), then the role
+and ownership guards. Responses are validated/serialized by Pydantic schemas,
+which are the JSON contract for both directions.
+
+**Data flow in the app.** On login, `refreshAll()` fires nine `secureFetch` calls
+in parallel (`trips`, `drivers`, `vehicles`, `warehouses`, `invoices`, `pods`,
+`alerts`, `automation-logs`, profile) → results land in React Context state →
+pages render. Mutations POST/PUT via `secureFetch`, then call
+`refreshData(module)`.
+
+### 3.2 Connection 2 — frontend ↔ backend over WebSocket (the realtime path)
+
+**URL.** `getWebSocketUrl()` builds `ws://<host>/ws?token=<jwt>` (browsers cannot
+set auth headers on a WebSocket handshake, so the token goes in the query
+string).
+
+**Backend.** `main.py`:
+
+```python
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
+    token = websocket.query_params.get("token") or token
+    try:
+        jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])  # must be valid
+    except Exception:
+        await websocket.close(code=1008); return
+    await manager.connect(websocket)
+    ...
+```
+
+Valid sockets are added to the `ConnectionManager` list (`websocket.py`).
+
+**Push.** Whenever something changes, a router or automation pipeline calls
+`manager.broadcast({...})`, which writes JSON to every connected socket. Two
+message types:
+
+- `{"type":"REFRESH_DATA","module":"trips"}` → the client refetches that REST
+  collection.
+- `{"type":"AUTOMATION_LOG","log":{...}}` → the client appends to the live feed
+  (filtered client-side by `manager_id`/`driver_id`).
+
+**Client.** `App.tsx`:
+
+```ts
+ws = new WebSocket(getWebSocketUrl());
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'REFRESH_DATA') refreshData(data.module);
+  else if (data.type === 'AUTOMATION_LOG') { /* filter by user, prepend, refreshAll */ }
+};
+ws.onclose = () => setTimeout(connectWS, 3000);   // auto-reconnect
+```
+
+The WebSocket carries **signals**, not data — the payload always comes back over
+HTTP (Connection 1).
+
+### 3.3 Connection 3 — backend → database over SQLAlchemy
+
+**Engine (created once).** `database.py`:
+
+```python
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fleet.db")
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})  # SQLite
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try: yield db
+    finally: db.close()
+```
+
+- The `engine` is a **connection pool**, built once at import.
+- `get_db()` yields a fresh **session per request** and always closes it (the
+  `finally`), so connections do not leak.
+- Handlers receive that session via `db: Session = Depends(get_db)`.
+
+**Models ↔ tables.** `models.py` classes (`User`, `Trip`, `Driver`, …) map to
+tables via `Base`; queries such as
+`db.query(Trip).filter(Trip.manager_id == current_user.id)` are the ORM
+translation, and writes are `db.add(obj)` / `db.commit()`.
+
+**Schema creation.** At startup the lifespan hook creates any missing tables and
+optionally seeds demo data:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)          # ensure tables exist
+    if settings.seed_demo_data: seed_database(db)  # optional demo tenants
+    yield
+```
+
+**Tenancy is enforced here.** Almost every query filters by `manager_id`, and
+`access.py` guards individual rows — that is the layer that stops one tenant
+reading another's fleet.
+
+### 3.4 End-to-end trace: a manager assigns a trip, the driver sees it live
+
+```
+Manager clicks "Assign"
+  │
+  ├─ secureFetch(`${API_BASE}/trips/42/assign`, POST)      ← Bearer token added
+  │     └─ browser → localhost:5173/api/... → Vite proxy → localhost:8000
+  │
+  ├─ BACKEND (routers/trips.py handler)
+  │     Depends(get_db)          → opens SQLAlchemy session
+  │     Depends(require_manager) → decodes JWT, checks role
+  │     access guard             → confirms trip 42 belongs to this manager
+  │     mutate: trip.status = "Assigned"; driver/vehicle → "On Duty"
+  │     db.commit()              → SQL INSERT/UPDATE into SQLite        ── (3)
+  │     await run_trip_assigned_pipeline(...)
+  │           ├─ db.add(AutomationLog) + commit                          ── (3)
+  │           └─ await manager.broadcast(...)                            ── (2)
+  │
+  ├─ BROADCAST: {"type":"REFRESH_DATA","module":"trips"}  → all sockets
+  │
+  └─ DRIVER'S BROWSER
+        ws.onmessage → refreshData('trips')
+          └─ secureFetch(`${API_BASE}/trips`)               ── (1)
+                └─ backend reads DB, returns driver's trips ── (3)
+        React Context updates → the trip appears on screen
+```
+
+Notice the **two round trips**: a write over HTTP, a push over WebSocket, then a
+read over HTTP. The WebSocket is just the "something changed" doorbell.
+
+### 3.5 Development vs production
+
+| | Development | Production |
+| --- | --- | --- |
+| API base | `/api` (same origin) | `/api` behind a reverse proxy, or `VITE_API_BASE=https://api.example.com` at build time |
+| Routing `/api`, `/ws` | **Vite dev proxy** | Nginx/Caddy (or the platform's proxy) |
+| Database | SQLite file `fleet.db` | point `DATABASE_URL` at Postgres/MySQL |
+| CORS | same origin → not needed | `CORS_ORIGINS` allowlist |
+
+The key design point: because the frontend uses relative URLs, nothing about the
+connection is hard-coded — only the proxy layer changes between dev and prod, not
+the app code.
+
+---
+
+## 4. Request lifecycle (authorization and scoping)
 
 This is the backbone of the system's security design:
 
@@ -113,7 +337,7 @@ HTTP request
 
 ---
 
-## 4. Data model
+## 5. Data model
 
 ```
                     ┌──────────┐
@@ -180,7 +404,7 @@ the state transition that flips assets to `On Duty`.
 
 ---
 
-## 5. Backend module design
+## 6. Backend module design
 
 | Module | Role | Design intent |
 | --- | --- | --- |
@@ -209,7 +433,7 @@ def get_trips(db: Session = Depends(get_db),
 
 ---
 
-## 6. Domain workflows
+## 7. Domain workflows
 
 ### A. Assignment (two paths)
 
@@ -258,7 +482,7 @@ is manager-only and tenant-guarded.
 
 ---
 
-## 7. The intelligence layer (`ai_service.py`)
+## 8. The intelligence layer (`ai_service.py`)
 
 Two capabilities, both **tenant-scoped** and **database-derived**:
 
@@ -289,7 +513,7 @@ cites the SQL numbers behind it, which keeps it explainable.
 
 ---
 
-## 8. Realtime layer
+## 9. Realtime layer
 
 `websocket.py` is a `ConnectionManager` holding a list of sockets and
 broadcasting JSON to all of them. Authentication is at the handshake
@@ -309,7 +533,7 @@ A production evolution would be per-tenant rooms and delta payloads.
 
 ---
 
-## 9. Frontend design
+## 10. Frontend design
 
 - **`App.tsx` is the application kernel.** It provides `AppContext` containing
   *all* domain collections (trips, drivers, vehicles, warehouses, invoices, pods,
@@ -337,7 +561,7 @@ A production evolution would be per-tenant rooms and delta payloads.
 
 ---
 
-## 10. Cross-cutting concerns
+## 11. Cross-cutting concerns
 
 - **Configuration and secrets:** everything env-driven; `.env` auto-loaded;
   `SECRET_KEY` mandatory in production, ephemeral in dev; CORS is an explicit
@@ -354,7 +578,7 @@ A production evolution would be per-tenant rooms and delta payloads.
 
 ---
 
-## 11. Design principles
+## 12. Design principles
 
 1. **One backend, one database, many tenants** — simplicity over distribution.
 2. **Every mutation flows through a guarded endpoint and, if lifecycle-
@@ -371,7 +595,7 @@ A production evolution would be per-tenant rooms and delta payloads.
 
 ---
 
-## 12. Known seams
+## 13. Known seams
 
 - **Single broadcast WebSocket** (no tenant rooms/deltas) — scales poorly to many
   concurrent tenants.
