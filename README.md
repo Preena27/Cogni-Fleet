@@ -27,6 +27,7 @@ updates. The AI advisor derives all of its answers from live database state.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design — tiers,
 data model, request lifecycle, workflows, realtime layer, and known trade-offs.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the hardening and feature plan.
 
 ---
 
